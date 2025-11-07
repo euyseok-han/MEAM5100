@@ -305,7 +305,7 @@ void handleRoot() {
       </div>
       <button class="preset-btn" onclick="setPIDPreset(1)">P-only</button>
       <button class="preset-btn" onclick="setPIDPreset(2)">PI</button>
-      <button class="preset-btn" onclick="setPIDPreset(3)">PID</button>
+      <button class="preset-btn" onclick="setPIDPreset(3)">PID</button> b
     </div>
     
     <div class="status">
@@ -331,9 +331,10 @@ void handleRoot() {
   
   <script>
     let currentTargetSpeed = 0;
-    
+                                                                                                                                                                                      
     function updateSpeed(value) {
       currentTargetSpeed = parseInt(value);
+      setSpeed(currentTargetSpeed);
       document.getElementById('speedValue').textContent = value;
       updateDirectionIndicator(currentTargetSpeed);
     }
@@ -561,7 +562,7 @@ void setup() {
   WiFi.begin(ssid, password);
   
   int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+  while (WiFi.status() != WL_CONNECTED && attempts < 500) {
     delay(500);
     Serial.print(".");
     attempts++;
