@@ -141,9 +141,7 @@ float calculatePID(float target, float current) {
 void updateMotorControl() {
   // Calculate PID output (can be positive or negative)
   float pidOutput = calculatePID(targetSpeed, currentSpeed);
-  
   // Apply to motor (automatically handles direction)
-  int pwm = constrain((int)pidOutput, -255, 255);
   setMotorPWM(pwm);
 }
 
@@ -522,7 +520,7 @@ void setup() {
   // Configure encoder pins
   pinMode(ENCODER_A, INPUT_PULLUP);
   pinMode(ENCODER_B, INPUT_PULLUP);
-    
+
   // Attach interrupt for encoder
   attachInterrupt(digitalPinToInterrupt(ENCODER_A), encoderISR, RISING);
   
