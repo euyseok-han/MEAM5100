@@ -265,7 +265,7 @@ void handleRoot() {
       <h3>Speed Control <span id="direction" class="direction-indicator stopped">STOPPED</span></h3>
       <div class="speed-control">
         <label>Target Speed: <span id="speedValue" class="speed-value">0</span> counts/s</label>
-        <input type="range" id="speedSlider" min="-150" max="150" value="0" step="10" oninput="updateSpeed(this.value)">
+        <input type="range" id="speedSlider" min="-150" max="150" value="0" step="10" oninput="setSpeed(this.value)">
         <div style="display: flex; justify-content: space-between; font-size: 12px; color: #666;">
           <span>← Reverse</span>
           <span>Forward →</span>
@@ -333,6 +333,7 @@ void handleRoot() {
     let currentTargetSpeed = 0;
                                                                                                                                                                                       
     function updateSpeed(value) {
+      console.log("updateSpeed is called");
       currentTargetSpeed = parseInt(value);
       setSpeed(currentTargetSpeed);
       document.getElementById('speedValue').textContent = value;
@@ -400,34 +401,6 @@ void handleRoot() {
       document.getElementById('kd').value = kd;
       updatePID();
     }
-    
-    // Update status periodically
-    setInterval(function() {
-      fetch('/status')
-        .then(response => response.json())
-        .then(data => {
-          document.getElementById('targetSpeed').textContent = data.target.toFixed(1);
-          document.getElementById('currentSpeed').textContent = data.current.toFixed(1);
-          document.getElementById('error').textContent = data.error.toFixed(1);
-          
-          // Show PWM magnitude and which channel is active
-          let pwmAbs = Math.abs(data.pwm);
-          let channel = 'None';
-          if (data.pwm > 0) {
-            channel = 'RPWM (Forward)';
-          } else if (data.pwm < 0) {
-            channel = 'LPWM (Reverse)';
-          }
-          
-          document.getElementById('pwm').textContent = pwmAbs;
-          document.getElementById('activeChannel').textContent = channel;
-          document.getElementById('encoder').textContent = data.encoder;
-          document.getElementById('displayKp').textContent = data.kp.toFixed(2);
-          document.getElementById('displayKi').textContent = data.ki.toFixed(2);
-          document.getElementById('displayKd').textContent = data.kd.toFixed(3);
-        })
-        .catch(err => console.log('Status update failed:', err));
-    }, 200);
     
     // Keyboard controls
     document.addEventListener('keydown', function(e) {
@@ -549,7 +522,7 @@ void setup() {
   // Configure encoder pins
   pinMode(ENCODER_A, INPUT_PULLUP);
   pinMode(ENCODER_B, INPUT_PULLUP);
-  
+    
   // Attach interrupt for encoder
   attachInterrupt(digitalPinToInterrupt(ENCODER_A), encoderISR, RISING);
   
