@@ -342,16 +342,23 @@ void handleRoot() {
       document.getElementById('speedValue').textContent = value;
       updateDirectionIndicator(currentTargetSpeed);
     }
-    setInterval()
+    setInterval(updateStatus, 1000);
 
     function updateStatus(){
       fetch('/status')
         .then(response => response.json())
         .then(data => {
-          document.getElementById()
-
-
-        })
+          document.getElementById("targetSpeed").textContent = data.target.toFixed(1);
+          document.getElementById("currentSpeed").textContent = data.current.toFixed(1);
+          document.getElementById("error").textContent = data.error.toFixed(1);
+          document.getElementById("pwm").textContent = data.pwm;
+          document.getElementById("encoder").textContent = data.encoder;
+          document.getElementById("displayKp").textContent = data.kp.toFixed(2);
+          document.getElementById("displayKi").textContent = data.ki.toFixed(2);
+          document.getElementById("displayKd").textContent = data.kd.toFixed(3);
+          if (data.channel !== undefined)
+            document.getElementById("activeChannel").textContent = data.channel;
+        }).catch(err => console.error("Error fetching /status:", err));
     }
     function updateDirectionIndicator(speed) {
       const indicator = document.getElementById('direction');
