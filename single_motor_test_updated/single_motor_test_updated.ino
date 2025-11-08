@@ -65,7 +65,7 @@ unsigned long lastControlUpdate = 0;
 unsigned long lastSpeedCalc = 0;
 unsigned long lastPrint = 0;
 
-const unsigned long CONTROL_PERIOD = 20;      // 20ms = 50Hz control loop
+const unsigned long CONTROL_PERIOD = 50;      // 20ms = 50Hz control loop
 const unsigned long SPEED_CALC_PERIOD = 100;  // 100ms speed calculation
 const unsigned long PRINT_PERIOD = 200;       // 200ms for serial output
 
@@ -141,6 +141,9 @@ float calculatePID(float target, float current) {
 void updateMotorControl() {
   // Calculate PID output (can be positive or negative)
   float pidOutput = calculatePID(targetSpeed, currentSpeed);
+  Serial.print("PID output");
+  Serial.println(pidOutput);
+  
   // Apply to motor (automatically handles direction)
   setMotorPWM(targetSpeed + pidOutput);
 }
@@ -600,6 +603,7 @@ void loop() {
     //               (int)pid.output, encoderCount, dir,
     //               pid.Kp, pid.Ki, pid.Kd)
     lastPrint = currentTime;
+    Serial.print("currentSpeed");
     Serial.println(currentSpeed);
   }
 }
