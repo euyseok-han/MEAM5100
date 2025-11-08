@@ -142,7 +142,7 @@ void updateMotorControl() {
   // Calculate PID output (can be positive or negative)
   float pidOutput = calculatePID(targetSpeed, currentSpeed);
   // Apply to motor (automatically handles direction)
-  setMotorPWM(pwm);
+  setMotorPWM(targetSpeed + pidOutput);
 }
 
 // ==================== SPEED CALCULATION ====================
@@ -583,10 +583,10 @@ void loop() {
   }
   
   // Control loop at specified interval
-  // if (currentTime - lastControlUpdate >= CONTROL_PERIOD) {
-  //   updateMotorControl();
-  //   lastControlUpdate = currentTime;
-  // }
+  if (currentTime - lastControlUpdate >= CONTROL_PERIOD) {
+    updateMotorControl();
+    lastControlUpdate = currentTime;
+  }
   
   // Print debug info to Serial Monitor
   if (currentTime - lastPrint >= PRINT_PERIOD) {
@@ -600,5 +600,6 @@ void loop() {
     //               (int)pid.output, encoderCount, dir,
     //               pid.Kp, pid.Ki, pid.Kd)
     lastPrint = currentTime;
+    Serial.println(currentSpeed);
   }
 }
