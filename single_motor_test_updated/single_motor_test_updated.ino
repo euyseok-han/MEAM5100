@@ -67,7 +67,7 @@ unsigned long lastPrint = 0;
 
 const unsigned long CONTROL_PERIOD = 50;      // 20ms = 50Hz control loop
 const unsigned long SPEED_CALC_PERIOD = 100;  // 100ms speed calculation
-const unsigned long PRINT_PERIOD = 200;       // 200ms for serial output
+const unsigned long PRINT_PERIOD = 1000;       // 200ms for serial output
 
 // ==================== ENCODER ISR ====================
 void IRAM_ATTR encoderISR() {
@@ -87,6 +87,7 @@ void IRAM_ATTR encoderISR() {
 
 void setMotorPWM(int pwmValue) {
   // pwmValue can be positive (forward) or negative (reverse)
+  pwmValue = pwmValue * 255 / 120; // Scaling rpm speed to pwm duty cycle
   pwmValue = constrain(pwmValue, -255, 255);
   if (pwmValue > 0) {
     // Forward: RPWM active, LPWM off
@@ -106,8 +107,7 @@ void setMotorPWM(int pwmValue) {
 }
 
 void stopMotor() {
-  ledcWrite(MOTOR_RPWM, 0);
-  ledcWrite(MOTOR_LPWM, 0);
+  
   targetSpeed = 0;
   
   // Reset PID
@@ -141,27 +141,25 @@ float calculatePID(float target, float current) {
 void updateMotorControl() {
   // Calculate PID output (can be positive or negative)
   float pidOutput = calculatePID(targetSpeed, currentSpeed);
-  Serial.print("PID output");
-  Serial.println(pidOutput);
+  // Serial.print("PID output: ");
+  // Serial.println(pidOutput);
   
   // Apply to motor (automatically handles direction)
-  setMotorPWM(targetSpeed + pidOutput);
+  setMotorPWM(currentSpeed + pidOutput);
 }
 
 // ==================== SPEED CALCULATION ====================
 void calculateSpeed() {
   unsigned long currentTime = millis();
-  float dt = (currentTime - lastSpeedCalc) / 1000.0; // Convert to seconds
-  
-
-
-  //debugging  dt was too short
+  float dt = currentTime - lastSpeedCalc; // Units (ms)
 
   if (dt > 100) {   
     // Calculate speed in encoder counts per second
     long delta = encoderCount - lastEncoderCount;
-    currentSpeed = delta / dt;
-    
+    currentSpeed = - delta / 1400.0 / dt; // 5670 counts per rev for 1:90 Motor, Units rev per ms
+    float rpm = currentSpeed * 1000 * 60;
+    currentSpeed = rpm;
+  
     // Update last values
     lastEncoderCount = encoderCount;
     lastSpeedCalc = currentTime;
@@ -270,7 +268,7 @@ void handleRoot() {
       <h3>Speed Control <span id="direction" class="direction-indicator stopped">STOPPED</span></h3>
       <div class="speed-control">
         <label>Target Speed: <span id="speedValue" class="speed-value">0</span> counts/s</label>
-        <input type="range" id="speedSlider" min="-150" max="150" value="0" step="10" oninput="setSpeed(this.value)">
+        <input type="range" id="speedSlider" min="-120" max="120" value="0" step="10" oninput="setSpeed(this.value)">
         <div style="display: flex; justify-content: space-between; font-size: 12px; color: #666;">
           <span>← Reverse</span>
           <span>Forward →</span>
@@ -344,7 +342,17 @@ void handleRoot() {
       document.getElementById('speedValue').textContent = value;
       updateDirectionIndicator(currentTargetSpeed);
     }
-    
+    setInterval()
+
+    function updateStatus(){
+      fetch('/status')
+        .then(response => response.json())
+        .then(data => {
+          document.getElementById()
+
+
+        })
+    }
     function updateDirectionIndicator(speed) {
       const indicator = document.getElementById('direction');
       if (speed > 0) {
@@ -407,29 +415,29 @@ void handleRoot() {
       updatePID();
     }
     
-    // Keyboard controls
-    document.addEventListener('keydown', function(e) {
-      switch(e.key) {
-        case 'ArrowUp': 
-        case 'w':
-          setSpeed(Math.min(currentTargetSpeed + 10, 150)); 
-          break;
-        case 'ArrowDown': 
-        case 's':
-          setSpeed(Math.max(currentTargetSpeed - 10, -150)); 
-          break;
-        case ' ': 
-          stopMotor(); 
-          e.preventDefault(); 
-          break;
-        case '1': setSpeed(30); break;
-        case '2': setSpeed(60); break;
-        case '3': setSpeed(100); break;
-        case '4': setSpeed(-30); break;
-        case '5': setSpeed(-60); break;
-        case '6': setSpeed(-100); break;
-      }
-    });
+    // // Keyboard controls
+    // document.addEventListener('keydown', function(e) {
+    //   switch(e.key) {
+    //     case 'ArrowUp': 
+    //     case 'w':
+    //       setSpeed(Math.min(currentTargetSpeed + 10, 150)); 
+    //       break;
+    //     case 'ArrowDown': 
+    //     case 's':
+    //       setSpeed(Math.max(currentTargetSpeed - 10, -150)); 
+    //       break;
+    //     case ' ': 
+    //       stopMotor(); 
+    //       e.preventDefault(); 
+    //       break;
+    //     case '1': setSpeed(30); break;
+    //     case '2': setSpeed(60); break;
+    //     case '3': setSpeed(100); break;
+    //     case '4': setSpeed(-30); break;
+    //     case '5': setSpeed(-60); break;
+    //     case '6': setSpeed(-100); break;
+    //   }
+    // });
   </script>
 </body>
 </html>
@@ -595,6 +603,8 @@ void loop() {
   
   // Print debug info to Serial Monitor
   if (currentTime - lastPrint >= PRINT_PERIOD) {
+    Serial.print("Encoder Count: ");
+    Serial.println(encoderCount);
     char dir[10];
     if (targetSpeed > 0) strcpy(dir, "FWD");
     else if (targetSpeed < 0) strcpy(dir, "REV");
@@ -604,7 +614,9 @@ void loop() {
     // targetSpeed, currentSpeed, pid.error, 
     //               (int)pid.output, encoderCount, dir,
     //               pid.Kp, pid.Ki, pid.Kd)
+
     lastPrint = currentTime;
+    
     Serial.print("currentSpeed");
     Serial.println(currentSpeed);
   }
