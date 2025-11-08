@@ -24,8 +24,8 @@
 #define MOTOR_LPWM        19   // Left PWM = Reverse direction
 
 // ==================== WIFI CONFIGURATION ====================
-const char* ssid = "Hphone";        // Change this
-const char* password = "qqqq1234";     // Change this
+const char* ssid = "TP-Link_8A8C";        // Change this
+const char* password = "12488674";     // Change this
 
 WebServer server(80);
 
@@ -153,7 +153,11 @@ void calculateSpeed() {
   unsigned long currentTime = millis();
   float dt = (currentTime - lastSpeedCalc) / 1000.0; // Convert to seconds
   
-  if (dt > 0) {
+
+
+  //debugging  dt was too short
+
+  if (dt > 100) {   
     // Calculate speed in encoder counts per second
     long delta = encoderCount - lastEncoderCount;
     currentSpeed = delta / dt;
@@ -434,6 +438,8 @@ void handleRoot() {
   server.send(200, "text/html", html);
 }
 
+//debugging
+
 void handleSetSpeed() {
   if (server.hasArg("speed")) {
     targetSpeed = server.arg("speed").toFloat();
@@ -441,13 +447,9 @@ void handleSetSpeed() {
     Serial.printf("Target speed set to: %.1f (", targetSpeed);
     if (targetSpeed > 0) {
       Serial.print("FORWARD"); // debug point
-      ledcWrite(MOTOR_RPWM, targetSpeed);
-      ledcWrite(MOTOR_LPWM, 0);
       }
     else if (targetSpeed < 0) {
       Serial.print("REVERSE");
-      ledcWrite(MOTOR_RPWM, 0);
-      ledcWrite(MOTOR_LPWM, -1 * targetSpeed);
       }
     else Serial.print("STOP");
     Serial.println(")");
@@ -529,7 +531,7 @@ void setup() {
   
   Serial.println("Encoder configured on GPIO 1 and 4");
   Serial.println("Hardware configured!");
-  
+
   // Connect to WiFi
   Serial.print("Connecting to WiFi: ");
   Serial.println(ssid);
