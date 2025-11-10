@@ -41,6 +41,8 @@ volatile long rightLastEncoderCount = 0;
 // Speed calculation
 float currentSpeed = 0;  // counts per second
 float targetSpeed = 0;   // desired speed (positive=forward, negative=reverse)
+float rightCurrentSpeed = 0;
+float rightTargetSpeed = 0; // desired speed for the right wheel(positive=forward, negative=reverse)
 
 // PWM settings
 const int PWM_FREQ = 5000;
@@ -103,7 +105,28 @@ void setMotorPWM(int pwmValue, int motorSide) {
   // pwmValue can be positive (forward) or negative (reverse)
   pwmValue = pwmValue * 255 / 120; // Scaling rpm speed to pwm duty cycle
   pwmValue = constrain(pwmValue, -255, 255);
-  if (pwmValue > 0) {
+
+  if (motorSide == 1) { // Right motor
+    pwmValue = pwmValue * -1; // Invert for right motor
+    if (pwmValue > 0) {
+    // Forward: RPWM active, LPWM off
+    ledcWrite(RIGHT_MOTOR_RPWM, pwmValue);
+    ledcWrite(RIGHT_MOTOR_LPWM, 0);
+  } 
+  else if (pwmValue < 0) {
+    // Reverse: LPWM active, RPWM off
+    ledcWrite(RIGHT_MOTOR_RPWM, 0);
+    ledcWrite(RIGHT_MOTOR_LPWM, abs(pwmValue));
+  } 
+  else {
+    // Stop: Both off
+    ledcWrite(RIGHT_MOTOR_RPWM, 0);
+    ledcWrite(RIGHT_MOTOR_LPWM, 0);
+  }
+  return;
+  }
+  // LEFT MOTOR
+  if (pwmValue > 0) { 
     // Forward: RPWM active, LPWM off
     ledcWrite(MOTOR_RPWM, pwmValue);
     ledcWrite(MOTOR_LPWM, 0);
@@ -155,27 +178,34 @@ float calculatePID(float target, float current) {
 void updateMotorControl() {
   // Calculate PID output (can be positive or negative)
   float pidOutput = calculatePID(targetSpeed, currentSpeed);
-  // Serial.print("PID output: ");
-  // Serial.println(pidOutput);
+  float rightPidOutput = calculatePID(rightTargetSpeed, rightCurrentSpeed);
   
   // Apply to motor (automatically handles direction)
   setMotorPWM(currentSpeed + pidOutput);
+  setMotorPWM(rightCurrentSpeed + rightPidOutput);
 }
 
 // ==================== SPEED CALCULATION ====================
-void calculateSpeed() {
+void calculateSpeed() { 
   unsigned long currentTime = millis();
   float dt = currentTime - lastSpeedCalc; // Units (ms)
 
   if (dt > 100) {   
     // Calculate speed in encoder counts per second
     long delta = encoderCount - lastEncoderCount;
-    currentSpeed = - delta / 1400.0 / dt; // 5670 counts per rev for 1:90 Motor, Units rev per ms
+    long delta_right = rightEncoderCount - rightLastEncoderCount;
+    currentSpeed = - delta / 1400.0 / dt; // 1400 counts per rev for 1:90 Motor, Units rev per ms
     float rpm = currentSpeed * 1000 * 60;
+    rightCurrentSpeed = - delta_right / 1400.0 / dt;
+    float right_rpm = rightCurrentSpeed * 1000 * 60;
+
     currentSpeed = rpm;
-  
+    rightCurrentSpeed = right_rpm;
+
     // Update last values
     lastEncoderCount = encoderCount;
+    rightLastEncoderCount = rightEncoderCount;
+    
     lastSpeedCalc = currentTime;
   }
 }
@@ -469,7 +499,7 @@ void handleRoot() {
 
 //debugging
 
-void handleSetSpeed() {
+void handleSetSpeed() { // not using anymore with PID
   if (server.hasArg("speed")) {
     targetSpeed = server.arg("speed").toFloat();
     server.send(200, "text/plain", "Speed set to " + String(targetSpeed));
@@ -538,14 +568,20 @@ void setup() {
   // Configure motor PWM pins
   pinMode(MOTOR_RPWM, OUTPUT);
   pinMode(MOTOR_LPWM, OUTPUT);
-  
+  pinMode(RIGHT_MOTOR_RPWM, OUTPUT);
+  pinMode(RIGHT_MOTOR_LPWM, OUTPUT);
+
   // Setup PWM for both channels
   ledcAttach(MOTOR_RPWM, PWM_FREQ, PWM_RESOLUTION);
   ledcAttach(MOTOR_LPWM, PWM_FREQ, PWM_RESOLUTION);
-  
+  ledcAttach(RIGHT_MOTOR_RPWM, PWM_FREQ, PWM_RESOLUTION);
+  ledcAttach(RIGHT_MOTOR_LPWM, PWM_FREQ, PWM_RESOLUTION);
+
   // Initialize both to 0 (motor stopped)
   ledcWrite(MOTOR_RPWM, 0);
   ledcWrite(MOTOR_LPWM, 0);
+  ledcWrite(RIGHT_MOTOR_RPWM, 0);
+  ledcWrite(RIGHT_MOTOR_LPWM, 0);
   
   Serial.println("PWM configured:");
   Serial.println("  GPIO 18 = RPWM (Forward)");
@@ -561,7 +597,7 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(ENCODER_A), encoderISR, RISING);
   attachInterrupt(digitalPinToInterrupt(RIGHT_ENCODER_A), rightEncoderISR, RISING);
   
-  Serial.println("Encoder configured on GPIO 1 and 4");
+  Serial.println("Encoder configured");
   Serial.println("Hardware configured!");
 
   // Connect to WiFi
@@ -570,7 +606,7 @@ void setup() {
   WiFi.begin(ssid, password);
   
   int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 500) {
+  while (WiFi.status() != WL_CONNECTED && attempts < 100) {
     delay(500);
     Serial.print(".");
     attempts++;
@@ -598,8 +634,6 @@ void setup() {
   Serial.println("HTTP server started");
   Serial.println("====================================");
   Serial.println("Ready for testing!");
-  Serial.println("Positive speed = Forward (RPWM)");
-  Serial.println("Negative speed = Reverse (LPWM)");
   Serial.println("====================================\n");
   
   // Initialize timing
@@ -611,7 +645,6 @@ void setup() {
 // ==================== MAIN LOOP ====================
 void loop() {
   server.handleClient();
-  
   unsigned long currentTime = millis();
   
   // Speed calculation at specified interval
