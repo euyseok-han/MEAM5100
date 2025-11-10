@@ -20,8 +20,12 @@
 // Single Motor Test Configuration
 #define ENCODER_A          1   // Encoder channel A
 #define ENCODER_B          4   // Encoder channel B
+#define RIGHT_ENCODER_A          1   // Encoder channel A
+#define RIGHT_ENCODER_B          4   // Encoder channel B
 #define MOTOR_RPWM        18   // Right PWM = Forward direction
 #define MOTOR_LPWM        19   // Left PWM = Reverse direction
+#define RIGHT_MOTOR_RPWM        18   // Right PWM = Forward direction
+#define RIGHT_MOTOR_LPWM        19   // Left PWM = Reverse direction
 
 // ==================== WIFI CONFIGURATION ====================
 const char* ssid = "TP-Link_8A8C";        // Change this
@@ -32,7 +36,8 @@ WebServer server(80);
 // ==================== MOTOR & ENCODER VARIABLES ====================
 volatile long encoderCount = 0;
 volatile long lastEncoderCount = 0;
-
+volatile long rightEncoderCount = 0;
+volatile long rightLastEncoderCount = 0;
 // Speed calculation
 float currentSpeed = 0;  // counts per second
 float targetSpeed = 0;   // desired speed (positive=forward, negative=reverse)
@@ -78,6 +83,15 @@ void IRAM_ATTR encoderISR() {
   }
 }
 
+void IRAM_ATTR rightEncoderISR_R() {
+  if (digitalRead(RIGHT_ENCODER_B) == HIGH) {
+    rightEncoderCount++;
+  } else {
+    rightEncoderCount--;
+  }
+}
+
+
 // ==================== MOTOR CONTROL ====================
 // For bidirectional PWM driver:
 // - RPWM active (LPWM=0) = Forward
@@ -85,7 +99,7 @@ void IRAM_ATTR encoderISR() {
 // - Both 0 = Stop
 // - Never activate both at same time!
 
-void setMotorPWM(int pwmValue) {
+void setMotorPWM(int pwmValue, int motorSide) {
   // pwmValue can be positive (forward) or negative (reverse)
   pwmValue = pwmValue * 255 / 120; // Scaling rpm speed to pwm duty cycle
   pwmValue = constrain(pwmValue, -255, 255);
@@ -540,9 +554,12 @@ void setup() {
   // Configure encoder pins
   pinMode(ENCODER_A, INPUT_PULLUP);
   pinMode(ENCODER_B, INPUT_PULLUP);
+  pinMode(RIGHT_ENCODER_A, INPUT_PULLUP);
+  pinMode(RIGHT_ENCODER_B, INPUT_PULLUP);
 
   // Attach interrupt for encoder
   attachInterrupt(digitalPinToInterrupt(ENCODER_A), encoderISR, RISING);
+  attachInterrupt(digitalPinToInterrupt(RIGHT_ENCODER_A), rightEncoderISR, RISING);
   
   Serial.println("Encoder configured on GPIO 1 and 4");
   Serial.println("Hardware configured!");
@@ -616,12 +633,6 @@ void loop() {
     if (targetSpeed > 0) strcpy(dir, "FWD");
     else if (targetSpeed < 0) strcpy(dir, "REV");
     else strcpy(dir, "STOP");
-    
-    // Serial.printf("Target: %6.1f | Current: %6.1f | Error: %6.1f | PWM: %4d | Enc: %6ld | %s | PID(%.1f,%.1f,%.2f)\n",
-    // targetSpeed, currentSpeed, pid.error, 
-    //               (int)pid.output, encoderCount, dir,
-    //               pid.Kp, pid.Ki, pid.Kd)
-
     lastPrint = currentTime;
     
     Serial.print("currentSpeed");
