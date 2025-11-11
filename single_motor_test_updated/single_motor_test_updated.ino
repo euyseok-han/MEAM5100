@@ -2,7 +2,6 @@
  * MEAM 5100 Lab 4.2 - Dual Motor Test with PID
  * ESP32-C3 with Encoder Feedback and PID Control
  *
- * Updated for bidirectional PWM motor driver (like BTS7960, IBT-2)
  * LPWM = Reverse/Backward
  * RPWM = Forward
  */
@@ -27,7 +26,6 @@
 #define RIGHT_MOTOR_RPWM   6   // Right motor RPWM = Forward direction
 #define RIGHT_MOTOR_LPWM   7   // Right motor LPWM = Reverse direction
 
-// ==================== WIFI CONFIGURATION ====================
 const char* ssid = "TP-Link_8A8C";        // Change this
 const char* password = "12488674";     // Change this
 
@@ -42,7 +40,7 @@ volatile long rightLastEncoderCount = 0;
 float currentSpeed = 0;  // counts per second
 float targetSpeed = 0;   // desired speed (positive=forward, negative=reverse)
 float rightCurrentSpeed = 0;
-float rightTargetSpeed = 0; // desired speed for the right wheel(positive=forward, negative=reverse)
+float rightTargetSpeed = 0; // desired speed for the right wheel
 
 // Speed + Steering control variables
 float baseSpeed = 0;     // Base forward/backward speed
@@ -98,13 +96,6 @@ void IRAM_ATTR rightEncoderISR_R() {
   }
 }
 
-
-// ==================== MOTOR CONTROL ====================
-// For bidirectional PWM driver:
-// - RPWM active (LPWM=0) = Forward
-// - LPWM active (RPWM=0) = Reverse
-// - Both 0 = Stop
-// - Never activate both at same time!
 
 void setMotorPWM(int pwmValue, int motorSide) {
   // pwmValue can be positive (forward) or negative (reverse)
@@ -215,13 +206,12 @@ void calculateSpeed() {
     long delta = encoderCount - lastEncoderCount;
     long delta_right = rightEncoderCount - rightLastEncoderCount;
 
-    // Left wheel: normal direction (no negation needed)
-    // Calculate: (counts / counts_per_rev / dt_ms) * 1000ms/s * 60s/min = RPM
+    // Left wheel
     currentSpeed = -1* delta / 1400.0 / dt; // 1400 counts per rev for 1:90 Motor
     float rpm = currentSpeed * 1000 * 60; // Convert to RPM
 
-    // Right wheel: no negation here, handle inversion in PWM output
-    rightCurrentSpeed = delta_right / 1400.0 / dt;
+    // Right wheel
+    rightCurrentSpeed = delta_right / 1400.0 / dt; // deleted -1
     float right_rpm = rightCurrentSpeed * 1000 * 60; // Convert to RPM
 
     // Update current speeds with RPM values
@@ -331,7 +321,7 @@ void handleRoot() {
 </head>
 <body>
   <div class="container">
-    <h1>🚗 Dual Motor Differential Drive</h1>
+    <h1>Dual Motor Differential Drive</h1>
     <h3>Speed + Steering Control</h3>
 
     <div class="control-section">
@@ -354,11 +344,10 @@ void handleRoot() {
         </div>
       </div>
 
-
-      <br><br>
+      <br>
       <button class="stop-btn" onclick="stopMotor()">STOP</button>
     </div>
-
+    
     <div class="pid-section">
       <h3>PID Tuning</h3>
       <div class="pid-input">
@@ -372,16 +361,9 @@ void handleRoot() {
       <div class="pid-input">
         <label>Kd:</label>
         <input type="number" id="kd" value="0" step="0.01" onchange="updatePID()">
-      </div>
-      <button class="preset-btn" onclick="setPIDPreset(1)">P-only</button>
-      <button class="preset-btn" onclick="setPIDPreset(2)">PI</button>
-      <button class="preset-btn" onclick="setPIDPreset(3)">PID</button> b
     </div>
-
+    
     <div class="status">
-      <h3>Status</h3>
-      <p><strong>Base Speed:</strong> <span id="baseSpeed">0</span> RPM | <strong>Steering:</strong> <span id="steering">0</span></p>
-      <hr>
       <p><strong>LEFT Wheel:</strong></p>
       <p style="margin-left: 20px;">Target: <span id="leftTarget">0</span> RPM | Current: <span id="leftCurrent">0</span> RPM</p>
       <p style="margin-left: 20px;">Error: <span id="leftError">0</span> | PWM: <span id="leftPWM">0</span> | Encoder: <span id="leftEncoder">0</span></p>
@@ -389,9 +371,8 @@ void handleRoot() {
       <p><strong>RIGHT Wheel:</strong></p>
       <p style="margin-left: 20px;">Target: <span id="rightTarget">0</span> RPM | Current: <span id="rightCurrent">0</span> RPM</p>
       <p style="margin-left: 20px;">Error: <span id="rightError">0</span> | PWM: <span id="rightPWM">0</span> | Encoder: <span id="rightEncoder">0</span></p>
-      <hr>
-      <p><strong>PID:</strong> Kp=<span id="displayKp">2.0</span> Ki=<span id="displayKi">0.5</span> Kd=<span id="displayKd">0.1</span></p>
     </div>
+ 
   </div>
   
   <script>
@@ -529,30 +510,7 @@ void handleRoot() {
       document.getElementById('kd').value = kd;
       updatePID();
     }
-    
-    // // Keyboard controls
-    // document.addEventListener('keydown', function(e) {
-    //   switch(e.key) {
-    //     case 'ArrowUp': 
-    //     case 'w':
-    //       setSpeed(Math.min(currentTargetSpeed + 10, 150)); 
-    //       break;
-    //     case 'ArrowDown': 
-    //     case 's':
-    //       setSpeed(Math.max(currentTargetSpeed - 10, -150)); 
-    //       break;
-    //     case ' ': 
-    //       stopMotor(); 
-    //       e.preventDefault(); 
-    //       break;
-    //     case '1': setSpeed(30); break;
-    //     case '2': setSpeed(60); break;
-    //     case '3': setSpeed(100); break;
-    //     case '4': setSpeed(-30); break;
-    //     case '5': setSpeed(-60); break;
-    //     case '6': setSpeed(-100); break;
-    //   }
-    // });
+      
   </script>
 </body>
 </html>
@@ -564,9 +522,7 @@ void handleRoot() {
 //debugging
 
 void handleSetSpeed() {
-  // Support both old single-speed mode and new speed+steering mode
   if (server.hasArg("speed") && server.hasArg("steering")) {
-    // New mode: speed + steering
     baseSpeed = server.arg("speed").toFloat();
     steeringValue = server.arg("steering").toFloat();
 
@@ -584,29 +540,8 @@ void handleSetSpeed() {
     Serial.printf("Control - Base: %.1f, Steering: %.1f -> Left: %.1f, Right: %.1f\n",
                   baseSpeed, steeringValue, targetSpeed, rightTargetSpeed);
   }
-  else if (server.hasArg("speed")) {
-    // Legacy mode: single speed (for backward compatibility)
-    float requestedSpeed = server.arg("speed").toFloat();
-
-    // Constrain to ±120 RPM to prevent PWM saturation (same as new mode)
-    targetSpeed = constrain(requestedSpeed, -120, 120);
-    rightTargetSpeed = targetSpeed;
-    baseSpeed = targetSpeed;
-    steeringValue = 0;
-
-    server.send(200, "text/plain", "Speed set to " + String(targetSpeed));
-    Serial.printf("Target speed set to: %.1f (", targetSpeed);
-    if (targetSpeed > 0) {
-      Serial.print("FORWARD");
-    }
-    else if (targetSpeed < 0) {
-      Serial.print("REVERSE");
-    }
-    else Serial.print("STOP");
-    Serial.println(")");
-  }
   else {
-    server.send(400, "text/plain", "Missing speed parameter");
+    server.send(400, "text/plain", "Missing speed or steering parameter");
   }
 }
 
@@ -780,7 +715,6 @@ void loop() {
                   targetSpeed, currentSpeed, leftPID.error, leftPID.output, encoderCount);
     Serial.printf("RIGHT - Target: %.1f | Current: %.1f | Error: %.1f | PWM: %.0f | Encoder: %ld\n",
                   rightTargetSpeed, rightCurrentSpeed, rightPID.error, rightPID.output, rightEncoderCount);
-    Serial.println("==================================\n");
     lastPrint = currentTime;
   }
 }
