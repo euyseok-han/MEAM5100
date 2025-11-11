@@ -6,7 +6,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Single Motor PID Test</title>
+  <title>Dual Motor Differential Drive</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     body { 
@@ -16,20 +16,54 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       background-color: #f0f0f0; 
     }
     .container { 
-      max-width: 500px; 
+      max-width: 1100px; /* wider for 2-column layout */
       margin: auto; 
       background: white; 
       padding: 20px; 
       border-radius: 10px; 
       box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      text-align: left;
     }
-    h1 { color: #333; }
+    h1, h3 {
+      text-align: center;
+      color: #333;
+      margin-top: 0;
+    }
+
+    /* === GRID LAYOUT FOR PANELS === */
+    .layout-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+      margin-top: 20px;
+    }
+    @media (min-width: 768px) {
+      .layout-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr)); /* 2 columns */
+      }
+    }
+
+    .panel {
+      padding: 15px;
+      border-radius: 8px;
+      background: #f9f9f9;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+    }
+
     .control-section { 
-      margin: 20px 0; 
-      padding: 15px; 
-      background: #f9f9f9; 
-      border-radius: 5px; 
+      background: #f9f9f9;
     }
+    .pid-section {
+      background: #fff3cd;
+    }
+    .status { 
+      background: #e7f3ff; 
+      font-family: monospace;
+    }
+    .graph-section {
+      background: #ffffff;
+    }
+
     button { 
       padding: 15px 30px; 
       margin: 5px;
@@ -43,44 +77,32 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     button:active { background-color: #45a049; }
     .stop-btn { background-color: #f44336; }
     .reverse-btn { background-color: #FF9800; }
-    .status { 
-      margin: 20px 0; 
-      padding: 15px; 
-      background: #e7f3ff; 
-      border-radius: 5px; 
-      font-family: monospace;
+
+    .speed-control { 
+      margin: 15px 0; 
     }
-    .speed-control { margin: 20px 0; }
-    input[type="range"] { width: 100%; }
+    input[type="range"] { 
+      width: 100%; 
+    }
     .speed-value { 
-      font-size: 24px; 
+      font-size: 20px; 
       font-weight: bold; 
       color: #2196F3; 
     }
-    .pid-section {
-      margin: 20px 0;
-      padding: 15px;
-      background: #fff3cd;
-      border-radius: 5px;
-    }
+
     .pid-input {
-      margin: 10px 0;
+      margin: 8px 0;
       text-align: left;
     }
     .pid-input label {
       display: inline-block;
-      width: 80px;
+      width: 60px;
     }
     .pid-input input {
-      width: 100px;
-      padding: 5px;
+      width: 90px;
+      padding: 4px;
     }
-    .preset-btn {
-      background-color: #2196F3;
-      padding: 8px 15px;
-      font-size: 14px;
-      margin: 3px;
-    }
+
     .direction-indicator {
       display: inline-block;
       padding: 5px 15px;
@@ -91,6 +113,37 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     .forward { background-color: #4CAF50; color: white; }
     .reverse { background-color: #FF9800; color: white; }
     .stopped { background-color: #999; color: white; }
+
+    /* Graph */
+    #speedChart {
+      width: 100%;
+      display: block;
+      margin-top: 10px;
+      border-radius: 4px;
+      background: #fafafa;
+    }
+
+    .legend {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #555;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .legend-box {
+      display: inline-block;
+      width: 14px;
+      height: 4px;
+      margin-right: 4px;
+      border-radius: 2px;
+    }
+
+    .legend-box.lt { background: #2196F3; }  /* Left Target */
+    .legend-box.lc { background: #0D47A1; }  /* Left Current */
+    .legend-box.rt { background: #FF9800; }  /* Right Target */
+    .legend-box.rc { background: #F44336; }  /* Right Current */
   </style>
 </head>
 <body>
@@ -98,60 +151,103 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     <h1>Dual Motor Differential Drive</h1>
     <h3>Speed + Steering Control</h3>
 
-    <div class="control-section">
-      <h3>Speed Control <span id="direction" class="direction-indicator stopped">STOPPED</span></h3>
-      <div class="speed-control">
-        <label>Base Speed: <span id="speedValue" class="speed-value">0</span> RPM</label>
-        <input type="range" id="speedSlider" min="-120" max="120" value="0" step="10" oninput="updateControl()">
-        <div style="display: flex; justify-content: space-between; font-size: 12px; color: #666;">
-          <span>← Reverse</span>
-          <span>Forward →</span>
+    <div class="layout-grid">
+      <!-- Control -->
+      <div class="control-section panel">
+        <h3>Speed Control <span id="direction" class="direction-indicator stopped">STOPPED</span></h3>
+        <div class="speed-control">
+          <label>Base Speed: <span id="speedValue" class="speed-value">0</span> RPM</label>
+          <input type="range" id="speedSlider" min="-120" max="120" value="0" step="10" oninput="updateControl()">
+          <div style="display: flex; justify-content: space-between; font-size: 12px; color: #666;">
+            <span>← Reverse</span>
+            <span>Forward →</span>
+          </div>
+        </div>
+
+        <div class="speed-control">
+          <label>Steering: <span id="steeringValue" class="speed-value">0</span></label>
+          <input type="range" id="steeringSlider" min="-60" max="60" value="0" step="5" oninput="updateControl()">
+          <div style="display: flex; justify-content: space-between; font-size: 12px; color: #666;">
+            <span>← Left Turn</span>
+            <span>Right Turn →</span>
+          </div>
+        </div>
+
+        <button class="stop-btn" onclick="stopMotor()">STOP</button>
+      </div>
+
+      <!-- PID -->
+      <div class="pid-section panel">
+        <h3>PID Tuning</h3>
+        <div class="pid-input">
+          <label>Kp:</label>
+          <input type="number" id="kp" value="0.4" step="0.1" onchange="updatePID()">
+        </div>
+        <div class="pid-input">
+          <label>Ki:</label>
+          <input type="number" id="ki" value="0.005" step="0.1" onchange="updatePID()">
+        </div>
+        <div class="pid-input">
+          <label>Kd:</label>
+          <input type="number" id="kd" value="0" step="0.01" onchange="updatePID()">
         </div>
       </div>
 
-      <div class="speed-control">
-        <label>Steering: <span id="steeringValue" class="speed-value">0</span></label>
-        <input type="range" id="steeringSlider" min="-60" max="60" value="0" step="5" oninput="updateControl()">
-        <div style="display: flex; justify-content: space-between; font-size: 12px; color: #666;">
-          <span>← Left Turn</span>
-          <span>Right Turn →</span>
-        </div>
+      <!-- Status -->
+      <div class="status panel">
+        <p><strong>LEFT Wheel:</strong></p>
+        <p style="margin-left: 20px;">
+          Target: <span id="leftTarget">0</span> RPM |
+          Current: <span id="leftCurrent">0</span> RPM
+        </p>
+        <p style="margin-left: 20px;">
+          Error: <span id="leftError">0</span> |
+          PWM: <span id="leftPWM">0</span> |
+          Encoder: <span id="leftEncoder">0</span>
+        </p>
+        <hr>
+        <p><strong>RIGHT Wheel:</strong></p>
+        <p style="margin-left: 20px;">
+          Target: <span id="rightTarget">0</span> RPM |
+          Current: <span id="rightCurrent">0</span> RPM
+        </p>
+        <p style="margin-left: 20px;">
+          Error: <span id="rightError">0</span> |
+          PWM: <span id="rightPWM">0</span> |
+          Encoder: <span id="rightEncoder">0</span>
+        </p>
       </div>
 
-      <br>
-      <button class="stop-btn" onclick="stopMotor()">STOP</button>
-    </div>
-    
-    <div class="pid-section">
-      <h3>PID Tuning</h3>
-      <div class="pid-input">
-        <label>Kp:</label>
-        <input type="number" id="kp" value="0.4" step="0.1" onchange="updatePID()">
+      <!-- Graph -->
+      <div class="graph-section panel">
+        <h3>Wheel Speed History</h3>
+        <canvas id="speedChart" width="500" height="220"></canvas>
+        <div class="legend">
+          <span class="legend-box lt"></span> Left Target
+          <span class="legend-box lc"></span> Left Current
+          <span class="legend-box rt"></span> Right Target
+          <span class="legend-box rc"></span> Right Current
+        </div>
       </div>
-      <div class="pid-input">
-        <label>Ki:</label>
-        <input type="number" id="ki" value="0.005" step="0.1" onchange="updatePID()">
-      </div>
-      <div class="pid-input">
-        <label>Kd:</label>
-        <input type="number" id="kd" value="0" step="0.01" onchange="updatePID()">
     </div>
-    
-    <div class="status">
-      <p><strong>LEFT Wheel:</strong></p>
-      <p style="margin-left: 20px;">Target: <span id="leftTarget">0</span> RPM | Current: <span id="leftCurrent">0</span> RPM</p>
-      <p style="margin-left: 20px;">Error: <span id="leftError">0</span> | PWM: <span id="leftPWM">0</span> | Encoder: <span id="leftEncoder">0</span></p>
-      <hr>
-      <p><strong>RIGHT Wheel:</strong></p>
-      <p style="margin-left: 20px;">Target: <span id="rightTarget">0</span> RPM | Current: <span id="rightCurrent">0</span> RPM</p>
-      <p style="margin-left: 20px;">Error: <span id="rightError">0</span> | PWM: <span id="rightPWM">0</span> | Encoder: <span id="rightEncoder">0</span></p>
-    </div>
- 
   </div>
   
   <script>
     let currentSpeed = 0;
     let currentSteering = 0;
+    const MAX_POINTS = 60;
+    const speedHistory = {
+      leftTarget: [],
+      leftCurrent: [],
+      rightTarget: [],
+      rightCurrent: []
+    };
+
+    function pushHistory(arr, value) {
+      if (typeof value !== 'number' || isNaN(value)) return;
+      arr.push(value);
+      if (arr.length > MAX_POINTS) arr.shift();
+    }
 
     function updateControl() {
       currentSpeed = parseInt(document.getElementById('speedSlider').value);
@@ -162,7 +258,6 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
       updateDirectionIndicator(currentSpeed, currentSteering);
 
-      // Send to ESP32
       fetch('/setspeed?speed=' + currentSpeed + '&steering=' + currentSteering)
         .then(response => response.text())
         .then(data => console.log(data));
@@ -184,35 +279,103 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         .then(data => console.log(data));
     }
 
-    setInterval(updateStatus, 1000);
+    setInterval(updateStatus, 200);
 
     function updateStatus(){
       fetch('/status')
         .then(response => response.json())
         .then(data => {
-          // Base control
-          document.getElementById("baseSpeed").textContent = data.baseSpeed.toFixed(1);
-          document.getElementById("steering").textContent = data.steering.toFixed(1);
-
-          // Left wheel
           document.getElementById("leftTarget").textContent = data.leftTarget.toFixed(1);
           document.getElementById("leftCurrent").textContent = data.leftCurrent.toFixed(1);
           document.getElementById("leftError").textContent = data.leftError.toFixed(1);
           document.getElementById("leftPWM").textContent = data.leftPWM;
           document.getElementById("leftEncoder").textContent = data.leftEncoder;
 
-          // Right wheel
           document.getElementById("rightTarget").textContent = data.rightTarget.toFixed(1);
           document.getElementById("rightCurrent").textContent = data.rightCurrent.toFixed(1);
           document.getElementById("rightError").textContent = data.rightError.toFixed(1);
           document.getElementById("rightPWM").textContent = data.rightPWM;
           document.getElementById("rightEncoder").textContent = data.rightEncoder;
 
-          // PID
-          document.getElementById("displayKp").textContent = data.kp.toFixed(2);
-          document.getElementById("displayKi").textContent = data.ki.toFixed(2);
-          document.getElementById("displayKd").textContent = data.kd.toFixed(3);
-        }).catch(err => console.error("Error fetching /status:", err));
+          pushHistory(speedHistory.leftTarget,  Number(data.leftTarget));
+          pushHistory(speedHistory.leftCurrent, Number(data.leftCurrent));
+          pushHistory(speedHistory.rightTarget, Number(data.rightTarget));
+          pushHistory(speedHistory.rightCurrent,Number(data.rightCurrent));
+
+          drawSpeedChart();
+        })
+        .catch(err => console.error("Error fetching /status:", err));
+    }
+    
+    function drawSpeedChart() {
+      const canvas = document.getElementById('speedChart');
+      if (!canvas) return;
+
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width;
+      const h = canvas.height;
+
+      ctx.clearRect(0, 0, w, h);
+
+      const allValues = [
+        ...speedHistory.leftTarget,
+        ...speedHistory.leftCurrent,
+        ...speedHistory.rightTarget,
+        ...speedHistory.rightCurrent
+      ].filter(v => typeof v === 'number' && !isNaN(v));
+
+      if (allValues.length === 0) return;
+
+      let minVal = Math.min(...allValues);
+      let maxVal = Math.max(...allValues);
+
+      if (maxVal === minVal) {
+        maxVal += 1;
+        minVal -= 1;
+      }
+
+      const padding = 25;
+      const innerW = w - padding * 2;
+      const innerH = h - padding * 2;
+
+      function yFor(v) {
+        return padding + innerH * (1 - (v - minVal) / (maxVal - minVal));
+      }
+
+      const stepX = innerW / Math.max(MAX_POINTS - 1, 1);
+
+      ctx.strokeStyle = '#e0e0e0';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      const midY = yFor((maxVal + minVal) / 2);
+      ctx.moveTo(padding, midY);
+      ctx.lineTo(w - padding, midY);
+      ctx.stroke();
+
+      ctx.fillStyle = '#888';
+      ctx.font = '10px Arial';
+      ctx.fillText(maxVal.toFixed(0) + ' RPM', 5, yFor(maxVal) + 3);
+      ctx.fillText(minVal.toFixed(0) + ' RPM', 5, yFor(minVal) + 3);
+
+      function drawSeries(arr, color) {
+        if (!arr.length) return;
+        ctx.beginPath();
+        const offset = MAX_POINTS - arr.length;
+        for (let i = 0; i < arr.length; i++) {
+          const x = padding + (offset + i) * stepX;
+          const y = yFor(arr[i]);
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+
+      drawSeries(speedHistory.leftTarget,  '#2196F3');
+      drawSeries(speedHistory.leftCurrent, '#0D47A1');
+      drawSeries(speedHistory.rightTarget, '#FF9800');
+      drawSeries(speedHistory.rightCurrent,'#F44336');
     }
 
     function updateDirectionIndicator(speed, steering) {
@@ -244,7 +407,6 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       }
     }
 
-
     function stopMotor() {
       currentSpeed = 0;
       currentSteering = 0;
@@ -268,27 +430,9 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         .then(response => response.text())
         .then(data => console.log(data));
     }
-    
-    function setPIDPreset(preset) {
-      let kp, ki, kd;
-      if (preset === 1) {  // P-only
-        kp = 2.0; ki = 0.0; kd = 0.0;
-      } else if (preset === 2) {  // PI
-        kp = 2.0; ki = 0.5; kd = 0.0;
-      } else {  // PID
-        kp = 2.0; ki = 0.5; kd = 0.1;
-      }
-      
-      document.getElementById('kp').value = kp;
-      document.getElementById('ki').value = ki;
-      document.getElementById('kd').value = kd;
-      updatePID();
-    }
-      
   </script>
 </body>
 </html>
 )rawliteral";
 
 #endif
-

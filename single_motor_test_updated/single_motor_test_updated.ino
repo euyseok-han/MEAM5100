@@ -27,8 +27,8 @@
 #define RIGHT_MOTOR_RPWM   6   // Right motor RPWM = Forward direction
 #define RIGHT_MOTOR_LPWM   7   // Right motor LPWM = Reverse direction
 
-const char* ssid = "TP-Link_8A8C";        // Change this
-const char* password = "12488674";     // Change this
+const char* ssid = "Hphone";        // Change this
+const char* password = "qqqq1234";     // Change this
 
 WebServer server(80);
 
@@ -420,15 +420,15 @@ void loop() {
     lastControlUpdate = currentTime;
   }
   
-  // Print debug info to Serial Monitor
-  if (currentTime - lastPrint >= PRINT_PERIOD) {
-    Serial.println("========== Motor Status ==========");
-    Serial.printf("Base Speed: %.1f RPM | Steering: %.1f\n", baseSpeed, steeringValue);
-    Serial.println("----------------------------------");
-    Serial.printf("LEFT  - Target: %.1f | Current: %.1f | Error: %.1f | PWM: %.0f | Encoder: %ld\n",
-                  targetSpeed, currentSpeed, leftPID.error, leftPID.output, encoderCount);
-    Serial.printf("RIGHT - Target: %.1f | Current: %.1f | Error: %.1f | PWM: %.0f | Encoder: %ld\n",
-                  rightTargetSpeed, rightCurrentSpeed, rightPID.error, rightPID.output, rightEncoderCount);
-    lastPrint = currentTime;
-  }
+  // // Print debug info to Serial Monitor
+  // if (currentTime - lastPrint >= PRINT_PERIOD) {
+  //   Serial.println("========== Motor Status ==========");
+  //   Serial.printf("Base Speed: %.1f RPM | Steering: %.1f\n", baseSpeed, steeringValue);
+  //   Serial.println("----------------------------------");
+  //   Serial.printf("LEFT  - Target: %.1f | Current: %.1f | Error: %.1f | PWM: %.0f | Encoder: %ld\n",
+  //                 targetSpeed, currentSpeed, leftPID.error, leftPID.output, encoderCount);
+  //   Serial.printf("RIGHT - Target: %.1f | Current: %.1f | Error: %.1f | PWM: %.0f | Encoder: %ld\n",
+  //                 rightTargetSpeed, rightCurrentSpeed, rightPID.error, rightPID.output, rightEncoderCount);
+  //   lastPrint = currentTime;
+  // }
 }
