@@ -98,8 +98,10 @@ void IRAM_ATTR rightEncoderISR_R() {
 
 
 void setMotorPWM(int pwmValue, int motorSide) {
-  // pwmValue can be positive (forward) or negative (reverse)
-  pwmValue = pwmValue * 255 / 120; // Scaling rpm speed to pwm duty cycle
+  // pwmValue is the direct PWM duty cycle from PID controller
+  // PID output should be in range that maps to reasonable PWM values
+  // We keep the scaling for now as PID output is in RPM units
+  pwmValue = pwmValue * 255 / 120; // Scaling PID output (in RPM units) to PWM duty cycle
   pwmValue = constrain(pwmValue, -255, 255);
 
   if (motorSide == RIGHT_MOTOR) { // Right motor
@@ -143,11 +145,19 @@ void stopMotor() {
   targetSpeed = 0;
   rightTargetSpeed = 0;
 
+  // Immediately stop motors
+  ledcWrite(MOTOR_RPWM, 0);
+  ledcWrite(MOTOR_LPWM, 0);
+  ledcWrite(RIGHT_MOTOR_RPWM, 0);
+  ledcWrite(RIGHT_MOTOR_LPWM, 0);
+
   // Reset PID for both motors
   leftPID.integral = 0;
   leftPID.lastError = 0;
+  leftPID.output = 0;
   rightPID.integral = 0;
   rightPID.lastError = 0;
+  rightPID.output = 0;
 }
 
 // ==================== PID CONTROL ====================
@@ -192,8 +202,8 @@ void updateMotorControl() {
   float rightPidOutput = calculatePID(rightPID, rightTargetSpeed, rightCurrentSpeed, dt);
 
   // Apply to motor (automatically handles direction)
-  setMotorPWM(currentSpeed + leftPidOutput, LEFT_MOTOR);
-  setMotorPWM(rightCurrentSpeed + rightPidOutput, RIGHT_MOTOR);
+  setMotorPWM(leftPidOutput, LEFT_MOTOR);
+  setMotorPWM(rightPidOutput, RIGHT_MOTOR);
 }
 
 // ==================== SPEED CALCULATION ====================
@@ -583,14 +593,18 @@ void handleStatus() {
   json += "\"leftTarget\":" + String(targetSpeed, 1) + ",";
   json += "\"leftCurrent\":" + String(currentSpeed, 1) + ",";
   json += "\"leftError\":" + String(leftPID.error, 1) + ",";
-  json += "\"leftPWM\":" + String((int)leftPID.output) + ",";
+  // Convert PID output (RPM units) to actual PWM value for display
+  int leftActualPWM = constrain((int)(leftPID.output * 255 / 120), -255, 255);
+  json += "\"leftPWM\":" + String(leftActualPWM) + ",";
   json += "\"leftEncoder\":" + String(encoderCount) + ",";
 
   // Right wheel
   json += "\"rightTarget\":" + String(rightTargetSpeed, 1) + ",";
   json += "\"rightCurrent\":" + String(rightCurrentSpeed, 1) + ",";
   json += "\"rightError\":" + String(rightPID.error, 1) + ",";
-  json += "\"rightPWM\":" + String((int)rightPID.output) + ",";
+  // Convert PID output (RPM units) to actual PWM value for display (note: right motor is inverted)
+  int rightActualPWM = constrain((int)(rightPID.output * 255 / 120 * -1), -255, 255);
+  json += "\"rightPWM\":" + String(rightActualPWM) + ",";
   json += "\"rightEncoder\":" + String(rightEncoderCount) + ",";
 
   // PID parameters (same for both)
@@ -711,10 +725,13 @@ void loop() {
     Serial.println("========== Motor Status ==========");
     Serial.printf("Base Speed: %.1f RPM | Steering: %.1f\n", baseSpeed, steeringValue);
     Serial.println("----------------------------------");
-    Serial.printf("LEFT  - Target: %.1f | Current: %.1f | Error: %.1f | PWM: %.0f | Encoder: %ld\n",
-                  targetSpeed, currentSpeed, leftPID.error, leftPID.output, encoderCount);
-    Serial.printf("RIGHT - Target: %.1f | Current: %.1f | Error: %.1f | PWM: %.0f | Encoder: %ld\n",
-                  rightTargetSpeed, rightCurrentSpeed, rightPID.error, rightPID.output, rightEncoderCount);
+    // Calculate actual PWM values for display (same conversion as in setMotorPWM)
+    int leftActualPWM = constrain((int)(leftPID.output * 255 / 120), -255, 255);
+    int rightActualPWM = constrain((int)(rightPID.output * 255 / 120 * -1), -255, 255);
+    Serial.printf("LEFT  - Target: %.1f | Current: %.1f | Error: %.1f | PWM: %d | Encoder: %ld\n",
+                  targetSpeed, currentSpeed, leftPID.error, leftActualPWM, encoderCount);
+    Serial.printf("RIGHT - Target: %.1f | Current: %.1f | Error: %.1f | PWM: %d | Encoder: %ld\n",
+                  rightTargetSpeed, rightCurrentSpeed, rightPID.error, rightActualPWM, rightEncoderCount);
     lastPrint = currentTime;
   }
 }
