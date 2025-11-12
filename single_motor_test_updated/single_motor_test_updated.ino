@@ -53,8 +53,8 @@ const int PWM_RESOLUTION = 8;  // 8-bit resolution (0-255)
 
 // ==================== PID PARAMETERS ====================
 struct PIDController {
-  float Kp = 0.4;      // Proportional gain
-  float Ki = 0.005;      // Integral gain
+  float Kp = 0.3;      // Proportional gain
+  float Ki = 1.1;      // Integral gain
   float Kd = 0.0;      // Derivative gain
   
   float error = 0;
@@ -192,8 +192,8 @@ void updateMotorControl() {
   float rightPidOutput = calculatePID(rightPID, rightTargetSpeed, rightCurrentSpeed, dt);
 
   // Apply to motor (automatically handles direction)
-  setMotorPWM(currentSpeed + leftPidOutput, LEFT_MOTOR);
-  setMotorPWM(rightCurrentSpeed + rightPidOutput, RIGHT_MOTOR);
+  setMotorPWM(leftPidOutput, LEFT_MOTOR);
+  setMotorPWM(rightPidOutput, RIGHT_MOTOR);
 }
 
 // ==================== SPEED CALCULATION ====================
@@ -207,7 +207,7 @@ void calculateSpeed() {
     long delta_right = rightEncoderCount - rightLastEncoderCount;
 
     // Left wheel
-    currentSpeed = -1* delta / 1400.0 / dt; // 1400 counts per rev for 1:90 Motor
+    currentSpeed = delta / 1400.0 / dt; // 1400 counts per rev for 1:90 Motor
     float rpm = currentSpeed * 1000 * 60; // Convert to RPM
 
     // Right wheel
@@ -242,7 +242,7 @@ void handleSetSpeed() {
     // Calculate left and right wheel speeds
     // steering > 0 means turn right (left wheel faster, right wheel slower)
     // steering < 0 means turn left (right wheel faster, left wheel slower)
-    targetSpeed = baseSpeed + steeringValue;
+    targetSpeed = -baseSpeed - steeringValue;
     rightTargetSpeed = baseSpeed - steeringValue;
 
     // Constrain each wheel's target speed to ±120 RPM to prevent PWM saturation
