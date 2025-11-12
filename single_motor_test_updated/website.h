@@ -181,11 +181,11 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <h3>PID Tuning</h3>
         <div class="pid-input">
           <label>Kp:</label>
-          <input type="number" id="kp" value="0.4" step="0.1" onchange="updatePID()">
+          <input type="number" id="kp" value="0.3" step="0.1" onchange="updatePID()">
         </div>
         <div class="pid-input">
           <label>Ki:</label>
-          <input type="number" id="ki" value="0.005" step="0.1" onchange="updatePID()">
+          <input type="number" id="ki" value="1.5" step="0.1" onchange="updatePID()">
         </div>
         <div class="pid-input">
           <label>Kd:</label>
