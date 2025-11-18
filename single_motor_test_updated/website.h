@@ -150,6 +150,9 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
   <div class="container">
     <h1>Dual Motor Differential Drive</h1>
     <h3>Speed + Steering Control</h3>
+    <div id="gamepadStatus" style="text-align: center; padding: 10px; margin-bottom: 15px; border-radius: 5px; background-color: #ffebee; color: #c62828; font-weight: bold;">
+      Xbox Controller: Disconnected
+    </div>
 
     <div class="layout-grid">
       <!-- Control -->
@@ -159,8 +162,8 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
           <label>Base Speed: <span id="speedValue" class="speed-value">0</span> RPM</label>
           <input type="range" id="speedSlider" min="-120" max="120" value="0" step="10" oninput="updateControl()">
           <div style="display: flex; justify-content: space-between; font-size: 12px; color: #666;">
-            <span>← Reverse</span>
-            <span>Forward →</span>
+            <span> Reverse</span>
+            <span>Forward </span>
           </div>
         </div>
 
@@ -168,8 +171,8 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
           <label>Steering: <span id="steeringValue" class="speed-value">0</span></label>
           <input type="range" id="steeringSlider" min="-60" max="60" value="0" step="5" oninput="updateControl()">
           <div style="display: flex; justify-content: space-between; font-size: 12px; color: #666;">
-            <span>← Left Turn</span>
-            <span>Right Turn →</span>
+            <span> Left Turn</span>
+            <span>Right Turn </span>
           </div>
         </div>
 
@@ -181,11 +184,11 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <h3>PID Tuning</h3>
         <div class="pid-input">
           <label>Kp:</label>
-          <input type="number" id="kp" value="0.4" step="0.1" onchange="updatePID()">
+          <input type="number" id="kp" value="0.3" step="0.1" onchange="updatePID()">
         </div>
         <div class="pid-input">
           <label>Ki:</label>
-          <input type="number" id="ki" value="0.005" step="0.1" onchange="updatePID()">
+          <input type="number" id="ki" value="1.5" step="0.1" onchange="updatePID()">
         </div>
         <div class="pid-input">
           <label>Kd:</label>
@@ -242,6 +245,12 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       rightTarget: [],
       rightCurrent: []
     };
+
+    // Xbox gamepad support
+    let gamepadConnected = false;
+    let gamepadIndex = null;
+    const DEADZONE = 0.15;
+    const MAX_SPEED = 120;
 
     function pushHistory(arr, value) {
       if (typeof value !== 'number' || isNaN(value)) return;
@@ -425,11 +434,99 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       let kp = document.getElementById('kp').value;
       let ki = document.getElementById('ki').value;
       let kd = document.getElementById('kd').value;
-      
+
       fetch('/setpid?kp=' + kp + '&ki=' + ki + '&kd=' + kd)
         .then(response => response.text())
         .then(data => console.log(data));
     }
+
+    // Gamepad event handlers
+    window.addEventListener("gamepadconnected", (e) => {
+      console.log("Gamepad connected:", e.gamepad.id);
+      gamepadConnected = true;
+      gamepadIndex = e.gamepad.index;
+      updateGamepadStatus(true, e.gamepad.id);
+    });
+
+    window.addEventListener("gamepaddisconnected", (e) => {
+      console.log("Gamepad disconnected");
+      gamepadConnected = false;
+      gamepadIndex = null;
+      updateGamepadStatus(false, "");
+      stopMotor();
+    });
+
+    function updateGamepadStatus(connected, name) {
+      const statusDiv = document.getElementById('gamepadStatus');
+      if (connected) {
+        statusDiv.style.backgroundColor = '#e8f5e9';
+        statusDiv.style.color = '#2e7d32';
+        statusDiv.textContent = 'Xbox Controller: Connected - ' + name;
+      } else {
+        statusDiv.style.backgroundColor = '#ffebee';
+        statusDiv.style.color = '#c62828';
+        statusDiv.textContent = 'Xbox Controller: Disconnected';
+      }
+    }
+
+    function applyDeadzone(value) {
+      return Math.abs(value) < DEADZONE ? 0 : value;
+    }
+
+    function pollGamepad() {
+      if (!gamepadConnected) return;
+
+      const gamepads = navigator.getGamepads();
+      const gamepad = gamepads[gamepadIndex];
+
+      if (!gamepad) return;
+
+      // RT (Right Trigger) = Forward (button 7 or axes 5)
+      // LT (Left Trigger) = Reverse (button 6 or axes 4)
+      // Left stick X-axis = Steering (axes 0)
+
+      let rtValue = 0;
+      let ltValue = 0;
+
+      // Try to get trigger values (different browsers may use different mappings)
+      if (gamepad.buttons[7]) {
+        rtValue = gamepad.buttons[7].value;
+      }
+      if (gamepad.buttons[6]) {
+        ltValue = gamepad.buttons[6].value;
+      }
+
+      // Left stick horizontal axis for steering
+      let stickX = applyDeadzone(gamepad.axes[0]);
+
+      // Calculate speed: RT gives forward, LT gives reverse
+      let speed = (rtValue - ltValue) * MAX_SPEED;
+
+      // Calculate steering: -60 to 60 range
+      let steering = stickX * 60;
+
+      // Update controls
+      if (Math.abs(speed - currentSpeed) > 2 || Math.abs(steering - currentSteering) > 2) {
+        setControl(Math.round(speed), Math.round(steering));
+      }
+    }
+
+    // Poll gamepad at 50ms intervals
+    setInterval(pollGamepad, 50);
+
+    // Check for already connected gamepads on load
+    window.addEventListener('load', () => {
+      const gamepads = navigator.getGamepads();
+      for (let i = 0; i < gamepads.length; i++) {
+        if (gamepads[i]) {
+          gamepadConnected = true;
+          gamepadIndex = i;
+          updateGamepadStatus(true, gamepads[i].id);
+          console.log("Gamepad already connected:", gamepads[i].id);
+          break;
+        }
+      }
+    });
   </script>
 </body>
 </html>

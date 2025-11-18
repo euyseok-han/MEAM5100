@@ -363,11 +363,23 @@ void setup() {
   Serial.println("Encoder configured");
   Serial.println("Hardware configured!");
 
+  // Configure static IP address
+  IPAddress local_IP(192, 168, 0, 111);      // Static IP
+  IPAddress gateway(192, 168, 0, 1);         // Gateway (usually your router)
+  IPAddress subnet(255, 255, 255, 0);        // Subnet mask
+  IPAddress primaryDNS(8, 8, 8, 8);          // Google DNS (optional)
+  IPAddress secondaryDNS(8, 8, 4, 4);        // Google DNS (optional)
+
+  // Configure ESP32 to use static IP
+  if (!WiFi.config(local_IP, gateway, subnet, primaryDNS, secondaryDNS)) {
+    Serial.println("Static IP configuration failed!");
+  }
+
   // Connect to WiFi
   Serial.print("Connecting to WiFi: ");
   Serial.println(ssid);
   WiFi.begin(ssid, password);
-  
+
   int attempts = 0;
   while (WiFi.status() != WL_CONNECTED && attempts < 100) {
     delay(500);
@@ -375,12 +387,12 @@ void setup() {
     attempts++;
   }
   Serial.println();
-  
+
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println("WiFi connected!");
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
-    Serial.println("Open this IP in your browser");
+    Serial.println("Open http://192.168.0.111 in your browser");
   } else {
     Serial.println("WiFi connection failed!");
     Serial.println("Check SSID and password");
