@@ -237,10 +237,13 @@ void handleSetSpeed() {
   if (server.hasArg("speed") && server.hasArg("steering")) {
     baseSpeed = server.arg("speed").toFloat();
     steeringValue = server.arg("steering").toFloat();
-
-    // Calculate left and right wheel speeds
-    // steering > 0 means turn right (left wheel faster, right wheel slower)
-    // steering < 0 means turn left (right wheel faster, left wheel slower)
+    if (steeringValue <= 5) steeringValue = steeringValue * 1.4;
+    if (baseSpeed <= 10) baseSpeed = baseSpeed * 1.4;
+    if (baseSpeed == 0.0){
+      Serial.print("spin");
+      targetSpeed = -baseSpeed - steeringValue;
+      rightTargetSpeed = baseSpeed - steeringValue;  
+    }
     targetSpeed = -baseSpeed - steeringValue;
     rightTargetSpeed = baseSpeed - steeringValue;
 

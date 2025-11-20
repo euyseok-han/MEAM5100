@@ -288,105 +288,6 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         .then(data => console.log(data));
     }
 
-    setInterval(updateStatus, 200);
-
-    function updateStatus(){
-      fetch('/status')
-        .then(response => response.json())
-        .then(data => {
-          document.getElementById("leftTarget").textContent = data.leftTarget.toFixed(1);
-          document.getElementById("leftCurrent").textContent = data.leftCurrent.toFixed(1);
-          document.getElementById("leftError").textContent = data.leftError.toFixed(1);
-          document.getElementById("leftPWM").textContent = data.leftPWM;
-          document.getElementById("leftEncoder").textContent = data.leftEncoder;
-
-          document.getElementById("rightTarget").textContent = data.rightTarget.toFixed(1);
-          document.getElementById("rightCurrent").textContent = data.rightCurrent.toFixed(1);
-          document.getElementById("rightError").textContent = data.rightError.toFixed(1);
-          document.getElementById("rightPWM").textContent = data.rightPWM;
-          document.getElementById("rightEncoder").textContent = data.rightEncoder;
-
-          pushHistory(speedHistory.leftTarget,  Number(data.leftTarget));
-          pushHistory(speedHistory.leftCurrent, Number(data.leftCurrent));
-          pushHistory(speedHistory.rightTarget, Number(data.rightTarget));
-          pushHistory(speedHistory.rightCurrent,Number(data.rightCurrent));
-
-          drawSpeedChart();
-        })
-        .catch(err => console.error("Error fetching /status:", err));
-    }
-    
-    function drawSpeedChart() {
-      const canvas = document.getElementById('speedChart');
-      if (!canvas) return;
-
-      const ctx = canvas.getContext('2d');
-      const w = canvas.width;
-      const h = canvas.height;
-
-      ctx.clearRect(0, 0, w, h);
-
-      const allValues = [
-        ...speedHistory.leftTarget,
-        ...speedHistory.leftCurrent,
-        ...speedHistory.rightTarget,
-        ...speedHistory.rightCurrent
-      ].filter(v => typeof v === 'number' && !isNaN(v));
-
-      if (allValues.length === 0) return;
-
-      let minVal = Math.min(...allValues);
-      let maxVal = Math.max(...allValues);
-
-      if (maxVal === minVal) {
-        maxVal += 1;
-        minVal -= 1;
-      }
-
-      const padding = 25;
-      const innerW = w - padding * 2;
-      const innerH = h - padding * 2;
-
-      function yFor(v) {
-        return padding + innerH * (1 - (v - minVal) / (maxVal - minVal));
-      }
-
-      const stepX = innerW / Math.max(MAX_POINTS - 1, 1);
-
-      ctx.strokeStyle = '#e0e0e0';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      const midY = yFor((maxVal + minVal) / 2);
-      ctx.moveTo(padding, midY);
-      ctx.lineTo(w - padding, midY);
-      ctx.stroke();
-
-      ctx.fillStyle = '#888';
-      ctx.font = '10px Arial';
-      ctx.fillText(maxVal.toFixed(0) + ' RPM', 5, yFor(maxVal) + 3);
-      ctx.fillText(minVal.toFixed(0) + ' RPM', 5, yFor(minVal) + 3);
-
-      function drawSeries(arr, color) {
-        if (!arr.length) return;
-        ctx.beginPath();
-        const offset = MAX_POINTS - arr.length;
-        for (let i = 0; i < arr.length; i++) {
-          const x = padding + (offset + i) * stepX;
-          const y = yFor(arr[i]);
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
-        ctx.stroke();
-      }
-
-      drawSeries(speedHistory.leftTarget,  '#2196F3');
-      drawSeries(speedHistory.leftCurrent, '#0D47A1');
-      drawSeries(speedHistory.rightTarget, '#FF9800');
-      drawSeries(speedHistory.rightCurrent,'#F44336');
-    }
-
     function updateDirectionIndicator(speed, steering) {
       const indicator = document.getElementById('direction');
       if (speed > 0 && Math.abs(steering) < 10) {
@@ -526,6 +427,45 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
           break;
         }
       }
+    });
+
+    // --- Added keyboard control section ---
+    document.addEventListener('keydown', function (e) {
+      let handled = false;
+
+      switch (e.key) {
+        case 'ArrowUp':
+          currentSpeed = Math.min(120, currentSpeed + 10);
+          setControl(currentSpeed, currentSteering);
+          handled = true;
+          break;
+
+        case 'ArrowDown':
+          currentSpeed = Math.max(-120, currentSpeed - 10);
+          setControl(currentSpeed, currentSteering);
+          handled = true;
+          break;
+
+        case 'ArrowLeft':
+          currentSteering = Math.max(-60, currentSteering - 5);
+          setControl(currentSpeed, currentSteering);
+          handled = true;
+          break;
+
+        case 'ArrowRight':
+          currentSteering = Math.min(60, currentSteering + 5);
+          setControl(currentSpeed, currentSteering);
+          handled = true;
+          break;
+
+        case 's':
+        case 'S':
+          stopMotor();
+          handled = true;
+          break;
+      }
+
+      if (handled) e.preventDefault();
     });
   </script>
 </body>
