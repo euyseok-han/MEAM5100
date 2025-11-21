@@ -27,8 +27,8 @@
 #define RIGHT_MOTOR_RPWM   6   // Right motor RPWM = Forward direction
 #define RIGHT_MOTOR_LPWM   7   // Right motor LPWM = Reverse direction
 
-const char* ssid = "TP-Link_8A8C";
-const char* password = "12488674";
+const char* ssid = "TP-Link_8A8C";        // Change this
+const char* password = "12488674";        // Change this
 
 WebServer server(80);
 
@@ -37,7 +37,6 @@ volatile long encoderCount = 0;
 volatile long lastEncoderCount = 0;
 volatile long rightEncoderCount = 0;
 volatile long rightLastEncoderCount = 0;
-
 // Speed calculation
 float currentSpeed = 0;  // counts per second
 float targetSpeed = 0;   // desired speed (positive=forward, negative=reverse)
@@ -55,7 +54,7 @@ const int PWM_RESOLUTION = 8;  // 8-bit resolution (0-255)
 // ==================== PID PARAMETERS ====================
 struct PIDController {
   float Kp = 0.3;      // Proportional gain
-  float Ki = 1.5;      // Integral gain
+  float Ki = 1.1;      // Integral gain
   float Kd = 0.0;      // Derivative gain
   
   float error = 0;
@@ -212,7 +211,7 @@ void calculateSpeed() {
     float rpm = currentSpeed * 1000 * 60; // Convert to RPM
 
     // Right wheel
-    rightCurrentSpeed = delta_right / 1400.0 / dt; // 1400 counts per rev for 1:90 Motor
+    rightCurrentSpeed = delta_right / 1400.0 / dt; // deleted -1
     float right_rpm = rightCurrentSpeed * 1000 * 60; // Convert to RPM
 
     // Update current speeds with RPM values
@@ -232,6 +231,8 @@ void handleRoot() {
   // Serve the HTML page stored in flash
   server.send_P(200, "text/html", INDEX_HTML);
 }
+
+//debugging
 
 void handleSetSpeed() {
   if (server.hasArg("speed") && server.hasArg("steering")) {
@@ -429,4 +430,5 @@ void loop() {
     updateMotorControl();
     lastControlUpdate = currentTime;
   }
+  
 }

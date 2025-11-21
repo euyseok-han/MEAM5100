@@ -150,6 +150,22 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
   <div class="container">
     <h1>Dual Motor Differential Drive</h1>
     <h3>Speed + Steering Control</h3>
+
+    <!-- Mode Selection -->
+    <div style="text-align: center; margin-bottom: 15px; padding: 15px; background: #fff9c4; border-radius: 8px;">
+      <label style="font-weight: bold; margin-right: 15px;">Control Mode:</label>
+      <label style="margin-right: 20px;">
+        <input type="radio" name="mode" value="1" checked onchange="changeMode()"> Mode 1 (Real-time)
+      </label>
+      <label>
+        <input type="radio" name="mode" value="2" onchange="changeMode()"> Mode 2 (Batch - Lower WiFi Usage)
+      </label>
+      <div id="mode2Hint" style="display: none; margin-top: 8px; font-size: 13px; color: #666;">
+        Press <strong>SEND COMMAND</strong>, <strong>Enter</strong> key, or <strong>A button</strong> (Xbox) to send
+      </div>
+      <div style="margin-top: 8px; font-size: 12px; color: #555; text-align: center;">
+    </div>
+
     <div id="gamepadStatus" style="text-align: center; padding: 10px; margin-bottom: 15px; border-radius: 5px; background-color: #ffebee; color: #c62828; font-weight: bold;">
       Xbox Controller: Disconnected
     </div>
@@ -169,14 +185,21 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
         <div class="speed-control">
           <label>Steering: <span id="steeringValue" class="speed-value">0</span></label>
-          <input type="range" id="steeringSlider" min="-60" max="60" value="0" step="5" oninput="updateControl()">
+          <input type="range" id="steeringSlider" min="-60" max="60" value="0" step="10" oninput="updateControl()">
           <div style="display: flex; justify-content: space-between; font-size: 12px; color: #666;">
             <span> Left Turn</span>
             <span>Right Turn </span>
           </div>
         </div>
 
-        <button class="stop-btn" onclick="stopMotor()">STOP</button>
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <button class="stop-btn" onclick="stopMotor()">STOP</button>
+          <div id="sendStatus" style="display:none; flex: 1; padding: 8px; border-radius: 5px; text-align: center; font-weight: bold; font-size: 14px; transition: opacity 0.3s;"></div>
+        </div>
+        <button id="sendBtn" style="display:none; background-color: #2196F3; margin-top: 10px; width: 100%;" onclick="sendBatchControl()">SEND COMMAND</button>
+        <div id="pendingIndicator" style="display:none; margin-top: 10px; padding: 8px; background: #fff3cd; border-radius: 5px; text-align: center; font-weight: bold; color: #856404;">
+          Pending: Speed=<span id="pendingSpeed">0</span> RPM, Steering=<span id="pendingSteering">0</span>
+        </div>
       </div>
 
       <!-- PID -->
@@ -238,6 +261,9 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
   <script>
     let currentSpeed = 0;
     let currentSteering = 0;
+    let controlMode = 1; // 1 = Real-time, 2 = Batch
+    let pendingSpeed = 0;
+    let pendingSteering = 0;
     const MAX_POINTS = 60;
     const speedHistory = {
       leftTarget: [],
@@ -258,24 +284,112 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       if (arr.length > MAX_POINTS) arr.shift();
     }
 
+    function changeMode() {
+      const modeRadios = document.getElementsByName('mode');
+      for (let radio of modeRadios) {
+        if (radio.checked) {
+          controlMode = parseInt(radio.value);
+          break;
+        }
+      }
+
+      const sendBtn = document.getElementById('sendBtn');
+      const pendingIndicator = document.getElementById('pendingIndicator');
+      const mode2Hint = document.getElementById('mode2Hint');
+
+      if (controlMode === 2) {
+        sendBtn.style.display = 'block';
+        pendingIndicator.style.display = 'block';
+        mode2Hint.style.display = 'block';
+        pendingSpeed = currentSpeed;
+        pendingSteering = currentSteering;
+        updatePendingDisplay();
+      } else {
+        sendBtn.style.display = 'none';
+        pendingIndicator.style.display = 'none';
+        mode2Hint.style.display = 'none';
+      }
+
+      console.log('Control mode changed to:', controlMode);
+    }
+
+    function updatePendingDisplay() {
+      document.getElementById('pendingSpeed').textContent = pendingSpeed;
+      document.getElementById('pendingSteering').textContent = pendingSteering;
+    }
+
     function updateControl() {
-      currentSpeed = parseInt(document.getElementById('speedSlider').value);
-      currentSteering = parseInt(document.getElementById('steeringSlider').value);
+      const speed = parseInt(document.getElementById('speedSlider').value);
+      const steering = parseInt(document.getElementById('steeringSlider').value);
 
-      document.getElementById('speedValue').textContent = currentSpeed;
-      document.getElementById('steeringValue').textContent = currentSteering;
+      document.getElementById('speedValue').textContent = speed;
+      document.getElementById('steeringValue').textContent = steering;
 
-      updateDirectionIndicator(currentSpeed, currentSteering);
+      updateDirectionIndicator(speed, steering);
+
+      if (controlMode === 1) {
+        // Mode 1: Send immediately (real-time)
+        currentSpeed = speed;
+        currentSteering = steering;
+        fetch('/setspeed?speed=' + currentSpeed + '&steering=' + currentSteering)
+          .then(response => response.text())
+          .then(data => console.log(data));
+      } else {
+        // Mode 2: Buffer the values, don't send yet
+        pendingSpeed = speed;
+        pendingSteering = steering;
+        updatePendingDisplay();
+      }
+    }
+
+    function sendBatchControl() {
+      // Send the pending values in one batch
+      currentSpeed = pendingSpeed;
+      currentSteering = pendingSteering;
+
+      const statusDiv = document.getElementById('sendStatus');
 
       fetch('/setspeed?speed=' + currentSpeed + '&steering=' + currentSteering)
         .then(response => response.text())
-        .then(data => console.log(data));
+        .then(data => {
+          console.log('Batch sent:', data);
+
+          // Show success message
+          statusDiv.style.display = 'block';
+          statusDiv.style.backgroundColor = '#d4edda';
+          statusDiv.style.color = '#155724';
+          statusDiv.textContent = 'Sent!';
+
+          // Auto-hide after 2 seconds
+          setTimeout(() => {
+            statusDiv.style.opacity = '0';
+            setTimeout(() => {
+              statusDiv.style.display = 'none';
+              statusDiv.style.opacity = '1';
+            }, 300);
+          }, 2000);
+        })
+        .catch(err => {
+          console.error('Error sending batch:', err);
+
+          // Show error message
+          statusDiv.style.display = 'block';
+          statusDiv.style.backgroundColor = '#f8d7da';
+          statusDiv.style.color = '#721c24';
+          statusDiv.textContent = 'Error sending command';
+
+          // Auto-hide after 3 seconds
+          setTimeout(() => {
+            statusDiv.style.opacity = '0';
+            setTimeout(() => {
+              statusDiv.style.display = 'none';
+              statusDiv.style.opacity = '1';
+            }, 300);
+          }, 3000);
+        });
     }
 
     function setControl(speed, steering) {
-      currentSpeed = speed;
-      currentSteering = steering;
-
       document.getElementById('speedSlider').value = speed;
       document.getElementById('steeringSlider').value = steering;
       document.getElementById('speedValue').textContent = speed;
@@ -283,9 +397,19 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
       updateDirectionIndicator(speed, steering);
 
-      fetch('/setspeed?speed=' + speed + '&steering=' + steering)
-        .then(response => response.text())
-        .then(data => console.log(data));
+      if (controlMode === 1) {
+        // Mode 1: Send immediately (real-time)
+        currentSpeed = speed;
+        currentSteering = steering;
+        fetch('/setspeed?speed=' + speed + '&steering=' + steering)
+          .then(response => response.text())
+          .then(data => console.log(data));
+      } else {
+        // Mode 2: Buffer the values, don't send yet
+        pendingSpeed = speed;
+        pendingSteering = steering;
+        updatePendingDisplay();
+      }
     }
 
     setInterval(updateStatus, 200);
@@ -419,11 +543,17 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     function stopMotor() {
       currentSpeed = 0;
       currentSteering = 0;
+      pendingSpeed = 0;
+      pendingSteering = 0;
       document.getElementById('speedValue').textContent = 0;
       document.getElementById('speedSlider').value = 0;
       document.getElementById('steeringValue').textContent = 0;
       document.getElementById('steeringSlider').value = 0;
       updateDirectionIndicator(0, 0);
+
+      if (controlMode === 2) {
+        updatePendingDisplay();
+      }
 
       fetch('/stop')
         .then(response => response.text())
@@ -473,6 +603,8 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       return Math.abs(value) < DEADZONE ? 0 : value;
     }
 
+    let aButtonWasPressed = false; // Track A button state to detect press events
+
     function pollGamepad() {
       if (!gamepadConnected) return;
 
@@ -484,6 +616,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       // RT (Right Trigger) = Forward (button 7 or axes 5)
       // LT (Left Trigger) = Reverse (button 6 or axes 4)
       // Left stick X-axis = Steering (axes 0)
+      // A Button = Send command in Mode 2 (button 0)
 
       let rtValue = 0;
       let ltValue = 0;
@@ -509,6 +642,19 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       if (Math.abs(speed - currentSpeed) > 2 || Math.abs(steering - currentSteering) > 2) {
         setControl(Math.round(speed), Math.round(steering));
       }
+
+      // Check A button (button 0) for sending command in Mode 2
+      if (controlMode === 2 && gamepad.buttons[0]) {
+        const aButtonPressed = gamepad.buttons[0].pressed;
+
+        // Detect button press (not held) - trigger on rising edge
+        if (aButtonPressed && !aButtonWasPressed) {
+          console.log('A button pressed - sending batch command');
+          sendBatchControl();
+        }
+
+        aButtonWasPressed = aButtonPressed;
+      }
     }
 
     // Poll gamepad at 50ms intervals
@@ -525,6 +671,80 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
           console.log("Gamepad already connected:", gamepads[i].id);
           break;
         }
+      }
+    });
+
+    // Keyboard controls
+    const SPEED_STEP = 10;
+    const STEERING_STEP = 5;
+
+    document.addEventListener('keydown', (e) => {
+      // Prevent default behavior for arrow keys and space
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) {
+        e.preventDefault();
+      }
+
+      let newSpeed = parseInt(document.getElementById('speedSlider').value);
+      let newSteering = parseInt(document.getElementById('steeringSlider').value);
+      let updated = false;
+
+      switch(e.key) {
+        case 'ArrowUp':
+          // Increase speed
+          newSpeed = Math.min(newSpeed + SPEED_STEP, 120);
+          updated = true;
+          break;
+
+        case 'ArrowDown':
+          // Decrease speed
+          newSpeed = Math.max(newSpeed - SPEED_STEP, -120);
+          updated = true;
+          break;
+
+        case 'ArrowLeft':
+          // Steer left (decrease steering value)
+          newSteering = Math.max(newSteering - STEERING_STEP, -60);
+          updated = true;
+          break;
+
+        case 'ArrowRight':
+          // Steer right (increase steering value)
+          newSteering = Math.min(newSteering + STEERING_STEP, 60);
+          updated = true;
+          break;
+
+        case ' ':
+          // Space bar - stop motor
+          stopMotor();
+          return;
+
+        case '1':
+          // Switch to Mode 1
+          document.querySelector('input[name="mode"][value="1"]').checked = true;
+          changeMode();
+          console.log('Switched to Mode 1 via keyboard');
+          return;
+
+        case '2':
+          // Switch to Mode 2
+          document.querySelector('input[name="mode"][value="2"]').checked = true;
+          changeMode();
+          console.log('Switched to Mode 2 via keyboard');
+          return;
+
+        case 'Enter':
+          // Enter key - send batch command in Mode 2
+          if (controlMode === 2) {
+            sendBatchControl();
+          }
+          return;
+      }
+
+      // Update controls if speed or steering changed
+      if (updated) {
+        document.getElementById('speedSlider').value = newSpeed;
+        document.getElementById('steeringSlider').value = newSteering;
+        updateControl();
       }
     });
   </script>
