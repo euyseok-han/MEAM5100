@@ -9,8 +9,8 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <Wire.h>
-#include <VL53L0X.h>
-#include <VL53L1X.h>
+#include <Adafruit_VL53L0X.h>
+#include <Adafruit_VL53L1X.h>
 #include "website.h"
 
 // ==================== PIN DEFINITIONS ====================
@@ -81,8 +81,8 @@ PIDController leftPID;   // PID controller for left motor
 PIDController rightPID;  // PID controller for right motor
 
 // ==================== TOF SENSORS ====================
-VL53L0X frontTOF;  // Front sensor (VL53L0X)
-VL53L1X rightTOF;  // Right sensor (VL53L1X)
+Adafruit_VL53L0X frontTOF = Adafruit_VL53L0X();  // Front sensor (VL53L0X)
+Adafruit_VL53L1X rightTOF = Adafruit_VL53L1X();  // Right sensor (VL53L1X)
 
 int frontDistance = 0;     // Front distance in mm
 int rightDistance = 0;     // Right distance in mm
@@ -237,17 +237,20 @@ void readTOFSensors() {
 
   if (currentTime - lastTOFRead >= TOF_READ_PERIOD) {
     // Read front sensor (VL53L0X)
-    frontDistance = frontTOF.readRangeContinuousMillimeters();
-    if (frontTOF.timeoutOccurred()) {
-      Serial.println("Front TOF timeout!");
-      frontDistance = 8190; // Max range on timeout
+    VL53L0X_RangingMeasurementData_t frontMeasure;
+    frontTOF.rangingTest(&frontMeasure, false);
+    if (frontMeasure.RangeStatus != 4) {  // 4 = out of range
+      frontDistance = frontMeasure.RangeMilliMeter;
+    } else {
+      frontDistance = 8190; // Max range
     }
 
     // Read right sensor (VL53L1X)
-    rightDistance = rightTOF.read();
-    if (rightTOF.timeoutOccurred()) {
-      Serial.println("Right TOF timeout!");
-      rightDistance = 4000; // Max range on timeout
+    VL53L1X_Result_t rightResults;
+    if (rightTOF.read(&rightResults) == VL53L1X_ERROR_NONE) {
+      rightDistance = rightResults.distance;
+    } else {
+      rightDistance = 4000; // Max range on error
     }
 
     lastTOFRead = currentTime;
@@ -555,28 +558,24 @@ void setup() {
   digitalWrite(TOF_XSHUT_FRONT, HIGH);
   delay(10);
 
-  frontTOF.setTimeout(500);
-  if (!frontTOF.init()) {
+  if (!frontTOF.begin(0x30, false, &Wire)) {
     Serial.println("Failed to initialize front TOF sensor (VL53L0X)!");
   } else {
-    frontTOF.setAddress(0x30); // Change I2C address to avoid conflict
-    frontTOF.startContinuous(50); // Continuous mode, 50ms timing budget
     Serial.println("Front TOF sensor (VL53L0X) configured at address 0x30");
+    frontTOF.startRangeContinuous(50); // Continuous mode, 50ms period
   }
 
   // Initialize right sensor (VL53L1X)
   digitalWrite(TOF_XSHUT_RIGHT, HIGH);
   delay(10);
 
-  rightTOF.setTimeout(500);
-  if (!rightTOF.init()) {
+  if (!rightTOF.begin(0x31, false, &Wire)) {
     Serial.println("Failed to initialize right TOF sensor (VL53L1X)!");
   } else {
-    rightTOF.setAddress(0x31); // Change I2C address
-    rightTOF.setDistanceMode(VL53L1X::Short); // Short range mode for better accuracy
-    rightTOF.setMeasurementTimingBudget(50000); // 50ms timing budget
-    rightTOF.startContinuous(50);
     Serial.println("Right TOF sensor (VL53L1X) configured at address 0x31");
+    rightTOF.setDistanceMode(VL53L1X_DISTANCE_MODE_SHORT); // Short range mode
+    rightTOF.setTimingBudget(50); // 50ms timing budget
+    rightTOF.startRanging();
   }
 
   Serial.println("Hardware configured!");
