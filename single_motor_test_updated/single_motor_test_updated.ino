@@ -8,6 +8,9 @@
 
 #include <WiFi.h>
 #include <WebServer.h>
+#include <Wire.h>
+#include <VL53L0X.h>
+#include <VL53L1X.h>
 #include "website.h"
 
 // ==================== PIN DEFINITIONS ====================
@@ -26,6 +29,12 @@
 #define RIGHT_ENCODER_B   19   // Right encoder channel B
 #define RIGHT_MOTOR_RPWM   6   // Right motor RPWM = Forward direction
 #define RIGHT_MOTOR_LPWM   7   // Right motor LPWM = Reverse direction
+
+// TOF Sensors (I2C)
+#define I2C_SDA            8   // I2C Data pin
+#define I2C_SCL            9   // I2C Clock pin
+#define TOF_XSHUT_FRONT    2   // VL53L0X (front) shutdown pin
+#define TOF_XSHUT_RIGHT    3   // VL53L1X (right) shutdown pin
 
 const char* ssid = "TP-Link_8A8C";        // Change this
 const char* password = "12488674";        // Change this
@@ -71,13 +80,39 @@ struct PIDController {
 PIDController leftPID;   // PID controller for left motor
 PIDController rightPID;  // PID controller for right motor
 
+// ==================== TOF SENSORS ====================
+VL53L0X frontTOF;  // Front sensor (VL53L0X)
+VL53L1X rightTOF;  // Right sensor (VL53L1X)
+
+int frontDistance = 0;     // Front distance in mm
+int rightDistance = 0;     // Right distance in mm
+
+// Wall-following control variables
+bool wallFollowMode = false;     // Enable/disable wall-following
+int frontGoalDistance = 150;     // Goal distance to front wall (mm)
+int rightGoalDistance = 100;     // Goal distance to right wall (mm)
+float wallFollowSpeed = 40;      // Base speed for wall following (RPM)
+
+// Wall-following PD control
+float lastRightError = 0;        // Previous error for derivative calculation
+float wallFollowKp = 0.3;        // Proportional gain
+float wallFollowKd = 0.5;        // Derivative gain
+
+// Turn state tracking
+enum TurnState { NONE, TURNING_LEFT };
+TurnState turnState = NONE;
+unsigned long turnStartTime = 0;
+const unsigned long TURN_DURATION = 1000; // Time to turn 90° (adjust based on testing)
+
 // ==================== TIMING VARIABLES ====================
 unsigned long lastControlUpdate = 0;
 unsigned long lastSpeedCalc = 0;
 unsigned long lastPrint = 0;
+unsigned long lastTOFRead = 0;
 
 const unsigned long CONTROL_PERIOD = 50;      // 50ms = 20Hz control loop
 const unsigned long SPEED_CALC_PERIOD = 100;  // 100ms speed calculation
+const unsigned long TOF_READ_PERIOD = 50;     // 50ms TOF sensor read interval
 
 // ==================== ENCODER ISR ====================
 void IRAM_ATTR encoderISR() {
@@ -196,6 +231,95 @@ void updateMotorControl() {
   setMotorPWM(rightPidOutput, RIGHT_MOTOR);
 }
 
+// ==================== TOF SENSOR READING ====================
+void readTOFSensors() {
+  unsigned long currentTime = millis();
+
+  if (currentTime - lastTOFRead >= TOF_READ_PERIOD) {
+    // Read front sensor (VL53L0X)
+    frontDistance = frontTOF.readRangeContinuousMillimeters();
+    if (frontTOF.timeoutOccurred()) {
+      Serial.println("Front TOF timeout!");
+      frontDistance = 8190; // Max range on timeout
+    }
+
+    // Read right sensor (VL53L1X)
+    rightDistance = rightTOF.read();
+    if (rightTOF.timeoutOccurred()) {
+      Serial.println("Right TOF timeout!");
+      rightDistance = 4000; // Max range on timeout
+    }
+
+    lastTOFRead = currentTime;
+  }
+}
+
+// ==================== WALL FOLLOWING CONTROL ====================
+void updateWallFollowing() {
+  if (!wallFollowMode) return;
+
+  // Handle ongoing turn
+  if (turnState == TURNING_LEFT) {
+    unsigned long currentTime = millis();
+    if (currentTime - turnStartTime < TURN_DURATION) {
+      // Continue turning left (spin in place)
+      targetSpeed = wallFollowSpeed;    // Left wheel forward
+      rightTargetSpeed = wallFollowSpeed; // Right wheel forward (same direction = turn left)
+      Serial.printf("Turning left... %lu ms remaining\n", TURN_DURATION - (currentTime - turnStartTime));
+      return;
+    } else {
+      // Turn complete
+      turnState = NONE;
+      lastRightError = 0; // Reset derivative term after turn
+      Serial.println("Turn complete - resuming wall following");
+    }
+  }
+
+  // Check if obstacle is too close in front
+  if (frontDistance < frontGoalDistance) {
+    // Obstacle detected - initiate 90° left turn
+    Serial.printf("Front obstacle detected: %d mm (goal: %d mm) - Turning left\n", frontDistance, frontGoalDistance);
+    turnState = TURNING_LEFT;
+    turnStartTime = millis();
+    lastRightError = 0; // Reset derivative term
+    return;
+  }
+
+  // Normal wall-following control
+  // Calculate error from right wall
+  float rightError = rightDistance - rightGoalDistance;
+
+  // Calculate derivative (rate of change of error)
+  // Positive derivative = distance increasing (moving away from wall)
+  // Negative derivative = distance decreasing (approaching wall)
+  float errorDerivative = rightError - lastRightError;
+
+  // PD control for steering correction
+  // Proportional: corrects based on current distance error
+  //   - Positive error (too far) -> steer right (negative correction)
+  //   - Negative error (too close) -> steer left (positive correction)
+  // Derivative: corrects based on rate of change
+  //   - Moving away from wall -> steer right more aggressively
+  //   - Approaching wall -> steer left more aggressively
+  float steeringCorrection = -(wallFollowKp * rightError + wallFollowKd * errorDerivative);
+  steeringCorrection = constrain(steeringCorrection, -60, 60);
+
+  // Set motor speeds: move forward while correcting for wall distance
+  targetSpeed = -wallFollowSpeed - steeringCorrection;
+  rightTargetSpeed = wallFollowSpeed - steeringCorrection;
+
+  // Constrain to safe limits
+  targetSpeed = constrain(targetSpeed, -120, 120);
+  rightTargetSpeed = constrain(rightTargetSpeed, -120, 120);
+
+  // Update last error for next iteration
+  lastRightError = rightError;
+
+  // Debug output
+  Serial.printf("Wall: Dist=%dmm, Goal=%dmm, Err=%.1f, dErr=%.1f, Steer=%.1f\n",
+                rightDistance, rightGoalDistance, rightError, errorDerivative, steeringCorrection);
+}
+
 // ==================== SPEED CALCULATION ====================
 void calculateSpeed() { 
   unsigned long currentTime = millis();
@@ -286,6 +410,47 @@ void handleSetPID() {
   }
 }
 
+void handleSetWallFollow() {
+  if (server.hasArg("frontGoal") && server.hasArg("rightGoal")) {
+    frontGoalDistance = server.arg("frontGoal").toInt();
+    rightGoalDistance = server.arg("rightGoal").toInt();
+
+    server.send(200, "text/plain", "Wall-following goals updated: Front=" + String(frontGoalDistance) + "mm, Right=" + String(rightGoalDistance) + "mm");
+    Serial.printf("Wall goals updated: Front=%d mm, Right=%d mm\n", frontGoalDistance, rightGoalDistance);
+  } else {
+    server.send(400, "text/plain", "Missing frontGoal or rightGoal parameter");
+  }
+}
+
+void handleSetWallPID() {
+  if (server.hasArg("kp") && server.hasArg("kd")) {
+    wallFollowKp = server.arg("kp").toFloat();
+    wallFollowKd = server.arg("kd").toFloat();
+
+    server.send(200, "text/plain", "Wall-following PD updated: Kp=" + String(wallFollowKp, 2) + ", Kd=" + String(wallFollowKd, 2));
+    Serial.printf("Wall PD updated: Kp=%.2f, Kd=%.2f\n", wallFollowKp, wallFollowKd);
+  } else {
+    server.send(400, "text/plain", "Missing kp or kd parameter");
+  }
+}
+
+void handleWallFollowMode() {
+  if (server.hasArg("enable")) {
+    wallFollowMode = (server.arg("enable") == "true" || server.arg("enable") == "1");
+
+    if (wallFollowMode) {
+      Serial.println("Wall-following mode ENABLED");
+      server.send(200, "text/plain", "Wall-following mode enabled");
+    } else {
+      Serial.println("Wall-following mode DISABLED");
+      stopMotor();
+      server.send(200, "text/plain", "Wall-following mode disabled");
+    }
+  } else {
+    server.send(400, "text/plain", "Missing enable parameter");
+  }
+}
+
 void handleStatus() {
   String json = "{";
   // Base control values
@@ -309,7 +474,18 @@ void handleStatus() {
   // PID parameters (same for both)
   json += "\"kp\":" + String(leftPID.Kp, 2) + ",";
   json += "\"ki\":" + String(leftPID.Ki, 2) + ",";
-  json += "\"kd\":" + String(leftPID.Kd, 3);
+  json += "\"kd\":" + String(leftPID.Kd, 3) + ",";
+
+  // TOF sensor data
+  json += "\"frontDist\":" + String(frontDistance) + ",";
+  json += "\"rightDist\":" + String(rightDistance) + ",";
+  json += "\"frontGoal\":" + String(frontGoalDistance) + ",";
+  json += "\"rightGoal\":" + String(rightGoalDistance) + ",";
+  json += "\"wallFollowMode\":" + String(wallFollowMode ? "true" : "false") + ",";
+
+  // Wall-following PD parameters
+  json += "\"wallKp\":" + String(wallFollowKp, 2) + ",";
+  json += "\"wallKd\":" + String(wallFollowKd, 2);
   json += "}";
 
   server.send(200, "application/json", json);
@@ -359,8 +535,50 @@ void setup() {
   // Attach interrupt for encoder
   attachInterrupt(digitalPinToInterrupt(ENCODER_A), encoderISR, RISING);
   attachInterrupt(digitalPinToInterrupt(RIGHT_ENCODER_A), rightEncoderISR_R, RISING);
-  
+
   Serial.println("Encoder configured");
+
+  // ==================== TOF SENSOR SETUP ====================
+  // Initialize I2C
+  Wire.begin(I2C_SDA, I2C_SCL);
+
+  // Configure shutdown pins
+  pinMode(TOF_XSHUT_FRONT, OUTPUT);
+  pinMode(TOF_XSHUT_RIGHT, OUTPUT);
+
+  // Reset both sensors
+  digitalWrite(TOF_XSHUT_FRONT, LOW);
+  digitalWrite(TOF_XSHUT_RIGHT, LOW);
+  delay(10);
+
+  // Initialize front sensor (VL53L0X) first
+  digitalWrite(TOF_XSHUT_FRONT, HIGH);
+  delay(10);
+
+  frontTOF.setTimeout(500);
+  if (!frontTOF.init()) {
+    Serial.println("Failed to initialize front TOF sensor (VL53L0X)!");
+  } else {
+    frontTOF.setAddress(0x30); // Change I2C address to avoid conflict
+    frontTOF.startContinuous(50); // Continuous mode, 50ms timing budget
+    Serial.println("Front TOF sensor (VL53L0X) configured at address 0x30");
+  }
+
+  // Initialize right sensor (VL53L1X)
+  digitalWrite(TOF_XSHUT_RIGHT, HIGH);
+  delay(10);
+
+  rightTOF.setTimeout(500);
+  if (!rightTOF.init()) {
+    Serial.println("Failed to initialize right TOF sensor (VL53L1X)!");
+  } else {
+    rightTOF.setAddress(0x31); // Change I2C address
+    rightTOF.setDistanceMode(VL53L1X::Short); // Short range mode for better accuracy
+    rightTOF.setMeasurementTimingBudget(50000); // 50ms timing budget
+    rightTOF.startContinuous(50);
+    Serial.println("Right TOF sensor (VL53L1X) configured at address 0x31");
+  }
+
   Serial.println("Hardware configured!");
 
   // Configure static IP address
@@ -404,6 +622,9 @@ void setup() {
   server.on("/stop", handleStop);
   server.on("/setpid", handleSetPID);
   server.on("/status", handleStatus);
+  server.on("/setwallfollow", handleSetWallFollow);
+  server.on("/wallfollowmode", handleWallFollowMode);
+  server.on("/setwallpid", handleSetWallPID);
   server.begin();
   
   Serial.println("HTTP server started");
@@ -413,22 +634,31 @@ void setup() {
   lastControlUpdate = millis();
   lastSpeedCalc = millis();
   lastPrint = millis();
+  lastTOFRead = millis();
 }
 
 // ==================== MAIN LOOP ====================
 void loop() {
   server.handleClient();
   unsigned long currentTime = millis();
-  
+
+  // Read TOF sensors
+  readTOFSensors();
+
   // Speed calculation at specified interval
   if (currentTime - lastSpeedCalc >= SPEED_CALC_PERIOD) {
     calculateSpeed();
   }
-  
+
+  // Wall-following control (if enabled)
+  if (wallFollowMode) {
+    updateWallFollowing();
+  }
+
   // Control loop at specified interval
   if (currentTime - lastControlUpdate >= CONTROL_PERIOD) {
     updateMotorControl();
     lastControlUpdate = currentTime;
   }
-  
+
 }

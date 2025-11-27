@@ -171,6 +171,45 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     </div>
 
     <div class="layout-grid">
+      <!-- Wall Following Control -->
+      <div class="panel" style="background: #e8f5e9; grid-column: 1 / -1;">
+        <h3>Wall-Following Mode</h3>
+        <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap;">
+          <label style="font-weight: bold;">
+            <input type="checkbox" id="wallFollowCheckbox" onchange="toggleWallFollow()">
+            Enable Wall-Following
+          </label>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <label>Front Goal:</label>
+            <input type="number" id="frontGoalInput" value="150" min="50" max="500" step="10" style="width: 80px; padding: 4px;" onchange="updateWallGoals()">
+            <span>mm</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <label>Right Goal:</label>
+            <input type="number" id="rightGoalInput" value="100" min="30" max="300" step="10" style="width: 80px; padding: 4px;" onchange="updateWallGoals()">
+            <span>mm</span>
+          </div>
+        </div>
+        <div style="margin-top: 10px; display: flex; gap: 15px; flex-wrap: wrap; align-items: center;">
+          <div style="font-family: monospace; display: flex; gap: 15px;">
+            <span>Front: <strong id="frontDistValue">--</strong> mm</span>
+            <span>Right: <strong id="rightDistValue">--</strong> mm</span>
+          </div>
+          <span id="wallFollowStatus" style="padding: 5px 10px; border-radius: 5px; background: #ccc; font-weight: bold;">INACTIVE</span>
+        </div>
+        <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #ccc; display: flex; gap: 15px; flex-wrap: wrap; align-items: center;">
+          <strong>Wall PD Tuning:</strong>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <label>Kp:</label>
+            <input type="number" id="wallKp" value="0.3" min="0" max="2" step="0.1" style="width: 70px; padding: 4px;" onchange="updateWallPID()">
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <label>Kd:</label>
+            <input type="number" id="wallKd" value="0.5" min="0" max="2" step="0.1" style="width: 70px; padding: 4px;" onchange="updateWallPID()">
+          </div>
+        </div>
+      </div>
+
       <!-- Control -->
       <div class="control-section panel">
         <h3>Speed Control <span id="direction" class="direction-indicator stopped">STOPPED</span></h3>
@@ -414,6 +453,47 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
     setInterval(updateStatus, 200);
 
+    function updateWallGoals() {
+      const frontGoal = parseInt(document.getElementById('frontGoalInput').value);
+      const rightGoal = parseInt(document.getElementById('rightGoalInput').value);
+
+      fetch('/setwallfollow?frontGoal=' + frontGoal + '&rightGoal=' + rightGoal)
+        .then(response => response.text())
+        .then(data => console.log(data))
+        .catch(err => console.error('Error setting wall goals:', err));
+    }
+
+    function updateWallPID() {
+      const kp = parseFloat(document.getElementById('wallKp').value);
+      const kd = parseFloat(document.getElementById('wallKd').value);
+
+      fetch('/setwallpid?kp=' + kp + '&kd=' + kd)
+        .then(response => response.text())
+        .then(data => console.log(data))
+        .catch(err => console.error('Error setting wall PID:', err));
+    }
+
+    function toggleWallFollow() {
+      const enabled = document.getElementById('wallFollowCheckbox').checked;
+
+      fetch('/wallfollowmode?enable=' + (enabled ? 'true' : 'false'))
+        .then(response => response.text())
+        .then(data => {
+          console.log(data);
+          const statusEl = document.getElementById('wallFollowStatus');
+          if (enabled) {
+            statusEl.textContent = 'ACTIVE';
+            statusEl.style.background = '#4CAF50';
+            statusEl.style.color = 'white';
+          } else {
+            statusEl.textContent = 'INACTIVE';
+            statusEl.style.background = '#ccc';
+            statusEl.style.color = 'black';
+          }
+        })
+        .catch(err => console.error('Error toggling wall-follow mode:', err));
+    }
+
     function updateStatus(){
       fetch('/status')
         .then(response => response.json())
@@ -429,6 +509,45 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
           document.getElementById("rightError").textContent = data.rightError.toFixed(1);
           document.getElementById("rightPWM").textContent = data.rightPWM;
           document.getElementById("rightEncoder").textContent = data.rightEncoder;
+
+          // Update TOF sensor data
+          if (data.frontDist !== undefined) {
+            document.getElementById("frontDistValue").textContent = data.frontDist;
+          }
+          if (data.rightDist !== undefined) {
+            document.getElementById("rightDistValue").textContent = data.rightDist;
+          }
+
+          // Update wall-follow mode status
+          if (data.wallFollowMode !== undefined) {
+            document.getElementById('wallFollowCheckbox').checked = data.wallFollowMode;
+            const statusEl = document.getElementById('wallFollowStatus');
+            if (data.wallFollowMode) {
+              statusEl.textContent = 'ACTIVE';
+              statusEl.style.background = '#4CAF50';
+              statusEl.style.color = 'white';
+            } else {
+              statusEl.textContent = 'INACTIVE';
+              statusEl.style.background = '#ccc';
+              statusEl.style.color = 'black';
+            }
+          }
+
+          // Update goal inputs if needed
+          if (data.frontGoal !== undefined) {
+            document.getElementById('frontGoalInput').value = data.frontGoal;
+          }
+          if (data.rightGoal !== undefined) {
+            document.getElementById('rightGoalInput').value = data.rightGoal;
+          }
+
+          // Update wall PD parameters
+          if (data.wallKp !== undefined) {
+            document.getElementById('wallKp').value = data.wallKp.toFixed(1);
+          }
+          if (data.wallKd !== undefined) {
+            document.getElementById('wallKd').value = data.wallKd.toFixed(1);
+          }
 
           pushHistory(speedHistory.leftTarget,  Number(data.leftTarget));
           pushHistory(speedHistory.leftCurrent, Number(data.leftCurrent));
