@@ -14,30 +14,29 @@
 #include "website.h"
 
 // ==================== PIN DEFINITIONS ====================
-// Motor Side Identifiers
-#define LEFT_MOTOR         0   // Left motor identifier
-#define RIGHT_MOTOR        1   // Right motor identifier
+#define LEFT_MOTOR         0   // Motor identifier
+#define RIGHT_MOTOR        1   // Motor identifier
 
-// Motor 1 (Left Wheel)
-#define ENCODER_A          4   // Left encoder channel A
-#define ENCODER_B          5   // Left encoder channel B
-#define MOTOR_RPWM         0   // Left motor RPWM = Forward direction
-#define MOTOR_LPWM         1   // Left motor LPWM = Reverse direction
+// Left Motor & Encoder
+#define ENCODER_A          4   // GPIO 4
+#define ENCODER_B          5   // GPIO 5
+#define MOTOR_RPWM         0   // GPIO 0 - Forward
+#define MOTOR_LPWM         1   // GPIO 1 - Reverse
 
-// Motor 2 (Right Wheel)
-#define RIGHT_ENCODER_A   10   // Right encoder channel A
-#define RIGHT_ENCODER_B   19   // Right encoder channel B
-#define RIGHT_MOTOR_RPWM   6   // Right motor RPWM = Forward direction
-#define RIGHT_MOTOR_LPWM   7   // Right motor LPWM = Reverse direction
+// Right Motor & Encoder
+#define RIGHT_ENCODER_A   10   // GPIO 10
+#define RIGHT_ENCODER_B   19   // GPIO 19
+#define RIGHT_MOTOR_RPWM   6   // GPIO 6 - Forward
+#define RIGHT_MOTOR_LPWM   7   // GPIO 7 - Reverse
 
-// TOF Sensors (I2C)
-#define I2C_SDA            8   // I2C Data pin
-#define I2C_SCL            9   // I2C Clock pin
-#define TOF_XSHUT_FRONT    2   // VL53L0X (front) shutdown pin
-#define TOF_XSHUT_RIGHT    3   // VL53L1X (right) shutdown pin
+// TOF Sensors
+#define I2C_SDA            8   // GPIO 8
+#define I2C_SCL            9   // GPIO 9
+#define TOF_XSHUT_FRONT    2   // GPIO 2 - VL53L1X
+#define TOF_XSHUT_RIGHT    3   // GPIO 3 - VL53L0X
 
-const char* ssid = "TP-Link_8A8C";        // Change this
-const char* password = "12488674";        // Change this
+const char* ssid = "TP-Link_8A8C";
+const char* password = "12488674";
 
 WebServer server(80);
 
@@ -46,63 +45,57 @@ volatile long encoderCount = 0;
 volatile long lastEncoderCount = 0;
 volatile long rightEncoderCount = 0;
 volatile long rightLastEncoderCount = 0;
-// Speed calculation
-float currentSpeed = 0;  // counts per second
-float targetSpeed = 0;   // desired speed (positive=forward, negative=reverse)
-float rightCurrentSpeed = 0;
-float rightTargetSpeed = 0; // desired speed for the right wheel
 
-// Speed + Steering control variables
-float baseSpeed = 0;     // Base forward/backward speed
-float steeringValue = 0; // Steering amount (negative=left, positive=right)
+float currentSpeed = 0;       // RPM
+float targetSpeed = 0;        // RPM
+float rightCurrentSpeed = 0;  // RPM
+float rightTargetSpeed = 0;   // RPM
 
-// PWM settings
+float baseSpeed = 0;          // User input
+float steeringValue = 0;      // User input
+
 const int PWM_FREQ = 5000;
-const int PWM_RESOLUTION = 8;  // 8-bit resolution (0-255)
+const int PWM_RESOLUTION = 8; // 0-255
 
 // ==================== PID PARAMETERS ====================
 struct PIDController {
-  float Kp = 0.3;      // Proportional gain
-  float Ki = 1.1;      // Integral gain
-  float Kd = 0.0;      // Derivative gain
-  
+  float Kp = 0.3;
+  float Ki = 1.1;
+  float Kd = 0.0;
+
   float error = 0;
   float lastError = 0;
   float integral = 0;
   float derivative = 0;
   float output = 0;
-  
-  // Anti-windup limits
+
   float integralMax = 100;
   float integralMin = -100;
 };
 
-PIDController leftPID;   // PID controller for left motor
-PIDController rightPID;  // PID controller for right motor
+PIDController leftPID;
+PIDController rightPID;
 
 // ==================== TOF SENSORS ====================
-Adafruit_VL53L0X frontTOF = Adafruit_VL53L0X();  // Front sensor (VL53L0X)
-Adafruit_VL53L1X rightTOF = Adafruit_VL53L1X();  // Right sensor (VL53L1X)
+Adafruit_VL53L1X frontTOF = Adafruit_VL53L1X();
+Adafruit_VL53L0X rightTOF = Adafruit_VL53L0X();
 
-int frontDistance = 0;     // Front distance in mm
-int rightDistance = 0;     // Right distance in mm
+int frontDistance = 0;        // mm
+int rightDistance = 0;        // mm
 
-// Wall-following control variables
-bool wallFollowMode = false;     // Enable/disable wall-following
-int frontGoalDistance = 150;     // Goal distance to front wall (mm)
-int rightGoalDistance = 100;     // Goal distance to right wall (mm)
-float wallFollowSpeed = 40;      // Base speed for wall following (RPM)
+bool wallFollowMode = false;
+int frontGoalDistance = 150;  // mm
+int rightGoalDistance = 100;  // mm
+float wallFollowSpeed = 40;   // RPM
 
-// Wall-following PD control
-float lastRightError = 0;        // Previous error for derivative calculation
-float wallFollowKp = 0.3;        // Proportional gain
-float wallFollowKd = 0.5;        // Derivative gain
+float lastRightError = 0;     // For derivative
+float wallFollowKp = 0.3;     // Proportional gain
+float wallFollowKd = 0.5;     // Derivative gain
 
-// Turn state tracking
 enum TurnState { NONE, TURNING_LEFT };
 TurnState turnState = NONE;
 unsigned long turnStartTime = 0;
-const unsigned long TURN_DURATION = 1000; // Time to turn 90° (adjust based on testing)
+const unsigned long TURN_DURATION = 1000;
 
 // ==================== TIMING VARIABLES ====================
 unsigned long lastControlUpdate = 0;
@@ -110,9 +103,9 @@ unsigned long lastSpeedCalc = 0;
 unsigned long lastPrint = 0;
 unsigned long lastTOFRead = 0;
 
-const unsigned long CONTROL_PERIOD = 50;      // 50ms = 20Hz control loop
-const unsigned long SPEED_CALC_PERIOD = 100;  // 100ms speed calculation
-const unsigned long TOF_READ_PERIOD = 50;     // 50ms TOF sensor read interval
+const unsigned long CONTROL_PERIOD = 50;      // ms
+const unsigned long SPEED_CALC_PERIOD = 100;  // ms
+const unsigned long TOF_READ_PERIOD = 50;     // ms
 
 // ==================== ENCODER ISR ====================
 void IRAM_ATTR encoderISR() {
@@ -236,23 +229,19 @@ void readTOFSensors() {
   unsigned long currentTime = millis();
 
   if (currentTime - lastTOFRead >= TOF_READ_PERIOD) {
-    // Read front sensor (VL53L0X)
-    VL53L0X_RangingMeasurementData_t frontMeasure;
-    frontTOF.rangingTest(&frontMeasure, false);
-    if (frontMeasure.RangeStatus != 4) {  // 4 = out of range
-      frontDistance = frontMeasure.RangeMilliMeter;
-    } else {
-      frontDistance = 8190; // Max range
+    // VL53L1X front sensor
+    if (frontTOF.dataReady()) {
+      int16_t distance = frontTOF.distance();
+      frontDistance = (distance > 0) ? distance : 8190;
+      frontTOF.clearInterrupt();
     }
 
-    // Read right sensor (VL53L1X)
-    VL53L1X_Result_t rightResults;
-    if (rightTOF.read(&rightResults) == VL53L1X_ERROR_NONE) {
-      rightDistance = rightResults.distance;
-    } else {
-      rightDistance = 4000; // Max range on error
-    }
+    // VL53L0X right sensor
+    VL53L0X_RangingMeasurementData_t measure;
+    rightTOF.rangingTest(&measure, false);
+    rightDistance = (measure.RangeStatus != 4) ? measure.RangeMilliMeter : 8190;
 
+    Serial.printf("Front: %d mm | Right: %d mm\n", frontDistance, rightDistance);
     lastTOFRead = currentTime;
   }
 }
@@ -261,66 +250,27 @@ void readTOFSensors() {
 void updateWallFollowing() {
   if (!wallFollowMode) return;
 
-  // Handle ongoing turn
-  if (turnState == TURNING_LEFT) {
-    unsigned long currentTime = millis();
-    if (currentTime - turnStartTime < TURN_DURATION) {
-      // Continue turning left (spin in place)
-      targetSpeed = wallFollowSpeed;    // Left wheel forward
-      rightTargetSpeed = wallFollowSpeed; // Right wheel forward (same direction = turn left)
-      Serial.printf("Turning left... %lu ms remaining\n", TURN_DURATION - (currentTime - turnStartTime));
-      return;
-    } else {
-      // Turn complete
-      turnState = NONE;
-      lastRightError = 0; // Reset derivative term after turn
-      Serial.println("Turn complete - resuming wall following");
-    }
-  }
-
-  // Check if obstacle is too close in front
+  // Obstacle detection - turn left
   if (frontDistance < frontGoalDistance) {
-    // Obstacle detected - initiate 90° left turn
-    Serial.printf("Front obstacle detected: %d mm (goal: %d mm) - Turning left\n", frontDistance, frontGoalDistance);
-    turnState = TURNING_LEFT;
-    turnStartTime = millis();
-    lastRightError = 0; // Reset derivative term
+    targetSpeed = wallFollowSpeed;
+    rightTargetSpeed = wallFollowSpeed;
+    Serial.printf("Front obstacle at %d mm - Turning left\n", frontDistance);
     return;
   }
 
-  // Normal wall-following control
-  // Calculate error from right wall
+  // PD control for wall following
   float rightError = rightDistance - rightGoalDistance;
+  float rightDerivative = rightError - lastRightError;
+  float steeringCorrection = (wallFollowKp * rightError) + (wallFollowKd * rightDerivative);
 
-  // Calculate derivative (rate of change of error)
-  // Positive derivative = distance increasing (moving away from wall)
-  // Negative derivative = distance decreasing (approaching wall)
-  float errorDerivative = rightError - lastRightError;
+  // Apply steering correction
+  targetSpeed = -(wallFollowSpeed - steeringCorrection);
+  rightTargetSpeed = wallFollowSpeed + steeringCorrection;
 
-  // PD control for steering correction
-  // Proportional: corrects based on current distance error
-  //   - Positive error (too far) -> steer right (negative correction)
-  //   - Negative error (too close) -> steer left (positive correction)
-  // Derivative: corrects based on rate of change
-  //   - Moving away from wall -> steer right more aggressively
-  //   - Approaching wall -> steer left more aggressively
-  float steeringCorrection = -(wallFollowKp * rightError + wallFollowKd * errorDerivative);
-  steeringCorrection = constrain(steeringCorrection, -60, 60);
-
-  // Set motor speeds: move forward while correcting for wall distance
-  targetSpeed = -wallFollowSpeed - steeringCorrection;
-  rightTargetSpeed = wallFollowSpeed - steeringCorrection;
-
-  // Constrain to safe limits
-  targetSpeed = constrain(targetSpeed, -120, 120);
-  rightTargetSpeed = constrain(rightTargetSpeed, -120, 120);
-
-  // Update last error for next iteration
   lastRightError = rightError;
 
-  // Debug output
-  Serial.printf("Wall: Dist=%dmm, Goal=%dmm, Err=%.1f, dErr=%.1f, Steer=%.1f\n",
-                rightDistance, rightGoalDistance, rightError, errorDerivative, steeringCorrection);
+  Serial.printf("Wall-follow: Front=%dmm Right=%dmm Error=%.1f Correction=%.1f\n",
+                frontDistance, rightDistance, rightError, steeringCorrection);
 }
 
 // ==================== SPEED CALCULATION ====================
@@ -543,40 +493,32 @@ void setup() {
 
   // ==================== TOF SENSOR SETUP ====================
   // Initialize I2C
+  Serial.println(F("Initializing TOF sensors..."));
   Wire.begin(I2C_SDA, I2C_SCL);
 
-  // Configure shutdown pins
-  pinMode(TOF_XSHUT_FRONT, OUTPUT);
-  pinMode(TOF_XSHUT_RIGHT, OUTPUT);
-
-  // Reset both sensors
-  digitalWrite(TOF_XSHUT_FRONT, LOW);
-  digitalWrite(TOF_XSHUT_RIGHT, LOW);
-  delay(10);
-
-  // Initialize front sensor (VL53L0X) first
-  digitalWrite(TOF_XSHUT_FRONT, HIGH);
-  delay(10);
-
-  if (!frontTOF.begin(0x30, false, &Wire)) {
-    Serial.println("Failed to initialize front TOF sensor (VL53L0X)!");
-  } else {
-    Serial.println("Front TOF sensor (VL53L0X) configured at address 0x30");
-    frontTOF.startRangeContinuous(50); // Continuous mode, 50ms period
+  // Initialize front sensor (VL53L1X)
+  Serial.println(F("Initializing front sensor (VL53L1X)..."));
+  if (!frontTOF.begin()) {
+    Serial.println(F("Failed to boot VL53L1X - Check wiring!"));
+    while(1);
   }
 
-  // Initialize right sensor (VL53L1X)
-  digitalWrite(TOF_XSHUT_RIGHT, HIGH);
-  delay(10);
-
-  if (!rightTOF.begin(0x31, false, &Wire)) {
-    Serial.println("Failed to initialize right TOF sensor (VL53L1X)!");
-  } else {
-    Serial.println("Right TOF sensor (VL53L1X) configured at address 0x31");
-    rightTOF.setDistanceMode(VL53L1X_DISTANCE_MODE_SHORT); // Short range mode
-    rightTOF.setTimingBudget(50); // 50ms timing budget
-    rightTOF.startRanging();
+  // Start ranging on front sensor
+  if (!frontTOF.startRanging()) {
+    Serial.println(F("Failed to start ranging on front sensor"));
+    while(1);
   }
+  Serial.println(F("Front sensor (VL53L1X) ready!"));
+
+  // Initialize right sensor (VL53L0X)
+  Serial.println(F("Initializing right sensor (VL53L0X)..."));
+  if (!rightTOF.begin()) {
+    Serial.println(F("Failed to boot VL53L0X - Check wiring!"));
+    while(1);
+  }
+  Serial.println(F("Right sensor (VL53L0X) ready!"));
+
+  Serial.println(F("Both TOF sensors initialized successfully!"));
 
   Serial.println("Hardware configured!");
 
