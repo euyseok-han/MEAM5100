@@ -1,6 +1,6 @@
 /*
  * MEAM 5100 Lab 4.2 - Dual Motor Test with PID
- * ESP32-C3 with Encoder Feedback and PID Control
+ * ESP32-S3 with Encoder Feedback and PID Control
  *
  * LPWM = Reverse/Backward
  * RPWM = Forward
@@ -11,29 +11,33 @@
 #include <Wire.h>
 #include <Adafruit_VL53L0X.h>
 #include <Adafruit_VL53L1X.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
 #include "website.h"
 
-// ==================== PIN DEFINITIONS ====================
+// ==================== PIN DEFINITIONS (ESP32-S3) ====================
 #define LEFT_MOTOR         0   // Motor identifier
 #define RIGHT_MOTOR        1   // Motor identifier
 
 // Left Motor & Encoder
 #define ENCODER_A          4   // GPIO 4
 #define ENCODER_B          5   // GPIO 5
-#define MOTOR_RPWM         0   // GPIO 0 - Forward
-#define MOTOR_LPWM         1   // GPIO 1 - Reverse
+#define MOTOR_RPWM         6   // GPIO 6 - Forward
+#define MOTOR_LPWM         7   // GPIO 7 - Reverse
 
 // Right Motor & Encoder
-#define RIGHT_ENCODER_A   10   // GPIO 10
-#define RIGHT_ENCODER_B   19   // GPIO 19
-#define RIGHT_MOTOR_RPWM   6   // GPIO 6 - Forward
-#define RIGHT_MOTOR_LPWM   7   // GPIO 7 - Reverse
+#define RIGHT_ENCODER_A   15   // GPIO 15
+#define RIGHT_ENCODER_B   16   // GPIO 16
+#define RIGHT_MOTOR_RPWM   9   // GPIO 9 - Forward
+#define RIGHT_MOTOR_LPWM  10   // GPIO 10 - Reverse
 
-// TOF Sensors
-#define I2C_SDA            8   // GPIO 8
-#define I2C_SCL            9   // GPIO 9
-#define TOF_XSHUT_FRONT    2   // GPIO 2 - VL53L1X
-#define TOF_XSHUT_RIGHT    3   // GPIO 3 - VL53L0X
+// I2C Sensors (TOF + MPU6050)
+#define I2C_SDA            8   // GPIO 8 (SDA)
+#define I2C_SCL           18   // GPIO 18 (SCL)
+#define TOF_XSHUT_FRONT    1   // GPIO 1 - VL53L1X
+#define TOF_XSHUT_RIGHT    2   // GPIO 2 - VL53L0X
+#define TOF_XSHUT_RIGHT2   3   // GPIO 3 - VL53L0X (second right sensor)
+// MPU6050 uses same I2C bus (default address 0x68)
 
 const char* ssid = "TP-Link_8A8C";
 const char* password = "12488674";
@@ -79,23 +83,50 @@ PIDController rightPID;
 // ==================== TOF SENSORS ====================
 Adafruit_VL53L1X frontTOF = Adafruit_VL53L1X();
 Adafruit_VL53L0X rightTOF = Adafruit_VL53L0X();
+Adafruit_VL53L0X right2TOF = Adafruit_VL53L0X();  // Second right sensor
 
-int frontDistance = 0;        // mm
-int rightDistance = 0;        // mm
+int frontDistance = 0;         // mm
+int rightDistance1 = 0;        // mm (front-right sensor)
+int rightDistance2 = 0;        // mm (back-right sensor)
+
+// ==================== MPU6050 ====================
+Adafruit_MPU6050 mpu;
+
+float currentAngle = 0;        // Current orientation angle (degrees)
+float gyroZOffset = 0;         // Gyro Z-axis calibration offset
+unsigned long lastGyroTime = 0;
 
 bool wallFollowMode = false;
-int frontGoalDistance = 150;  // mm
-int rightGoalDistance = 100;  // mm
+int frontGoalDistance = 150;   // mm
+int rightGoalDistance1 = 100;  // mm
+int rightGoalDistance2 = 100;  // mm
 float wallFollowSpeed = 40;   // RPM
 
 float lastRightError = 0;     // For derivative
-float wallFollowKp = 0.3;     // Proportional gain
-float wallFollowKd = 0.5;     // Derivative gain
+float Kp_dist = 1.5;          // PD gain for distance error
+float Kd_dist = 0.8;          // PD derivative for distance
+float Kp_angle = 2.0;         // P gain for angle error
+float lastDistError = 0;      // For derivative
 
-enum TurnState { NONE, TURNING_LEFT };
-TurnState turnState = NONE;
-unsigned long turnStartTime = 0;
-const unsigned long TURN_DURATION = 1000;
+// ==================== STATE MACHINE ====================
+enum RobotState {
+  STATE_IDLE,
+  STATE_WALL_FOLLOW,    // Normal PID wall following
+  STATE_INNER_CORNER,   // 90° left turn (obstacle)
+  STATE_OUTER_CORNER,   // 90° right turn (wall ends)
+  STATE_BLIND_FORWARD,  // Move forward to clear corner
+  STATE_SEEK_WALL       // Find wall after turn
+};
+
+RobotState currentState = STATE_IDLE;
+
+// Corner detection thresholds
+const int FRONT_STOP_DISTANCE = 200;   // mm
+const int WALL_LOST_THRESHOLD = 800;   // mm
+const int BLIND_FORWARD_DURATION = 800; // ms
+
+float targetTurnAngle = 0;
+unsigned long stateStartTime = 0;
 
 // ==================== TIMING VARIABLES ====================
 unsigned long lastControlUpdate = 0;
@@ -224,6 +255,83 @@ void updateMotorControl() {
   setMotorPWM(rightPidOutput, RIGHT_MOTOR);
 }
 
+// ==================== MPU6050 GYRO INTEGRATION ====================
+/*
+ * Gyro Integration Math:
+ * - MPU6050 returns angular velocity in rad/s
+ * - Convert to deg/s: multiply by 57.2958
+ * - Integration: angle(t) = angle(t-1) + (gyro_z * dt)
+ * - Calibration offset removes drift when stationary
+ */
+float readGyroZ() {
+  sensors_event_t a, g, temp;
+  mpu.getEvent(&a, &g, &temp);
+  return (g.gyro.z - gyroZOffset) * 57.2958; // Convert rad/s to deg/s
+}
+
+void updateGyroIntegration() {
+  unsigned long currentTime = millis();
+  float dt = (currentTime - lastGyroTime) / 1000.0;
+
+  if (dt <= 0) return;
+
+  lastGyroTime = currentTime;
+
+  float gyroZ = readGyroZ();
+  currentAngle += gyroZ * dt; // Integration: angle = velocity * time
+
+  // Normalize angle to [-180, 180]
+  while (currentAngle > 180) currentAngle -= 360;
+  while (currentAngle < -180) currentAngle += 360;
+}
+
+void resetYaw() {
+  currentAngle = 0;
+  lastGyroTime = millis();
+}
+
+// ==================== TURN BY ANGLE ====================
+/*
+ * P-Controller for turning:
+ * - Motor speed proportional to remaining angle
+ * - Slows down as target approached (prevents overshoot)
+ * - Returns true when turn complete (within tolerance)
+ */
+bool turnByAngle(float targetAngle) {
+  float angleError = targetAngle - currentAngle;
+
+  // Normalize error to [-180, 180]
+  while (angleError > 180) angleError -= 360;
+  while (angleError < -180) angleError += 360;
+
+  const float angleTolerance = 2.0;  // degrees
+  const float Kp_turn = 0.8;         // Turn P-gain
+  const float minTurnSpeed = 15;     // Minimum speed to overcome friction
+  const float maxTurnSpeed = 50;     // Maximum turn speed
+
+  if (abs(angleError) < angleTolerance) {
+    stopMotor();
+    return true;  // Turn complete
+  }
+
+  // P-controller: speed proportional to error
+  float turnSpeed = Kp_turn * abs(angleError);
+  turnSpeed = constrain(turnSpeed, minTurnSpeed, maxTurnSpeed);
+
+  // Differential drive turning
+  if (angleError > 0) {
+    // Turn left
+    targetSpeed = -turnSpeed;
+    rightTargetSpeed = turnSpeed;
+  } else {
+    // Turn right
+    targetSpeed = turnSpeed;
+    rightTargetSpeed = -turnSpeed;
+  }
+
+  return false;  // Still turning
+}
+
 // ==================== TOF SENSOR READING ====================
 void readTOFSensors() {
   unsigned long currentTime = millis();
@@ -236,41 +344,135 @@ void readTOFSensors() {
       frontTOF.clearInterrupt();
     }
 
-    // VL53L0X right sensor
-    VL53L0X_RangingMeasurementData_t measure;
-    rightTOF.rangingTest(&measure, false);
-    rightDistance = (measure.RangeStatus != 4) ? measure.RangeMilliMeter : 8190;
+    // VL53L0X right front sensor
+    VL53L0X_RangingMeasurementData_t measure1;
+    rightTOF.rangingTest(&measure1, false);
+    rightDistance1 = (measure1.RangeStatus != 4) ? measure1.RangeMilliMeter : 8190;
 
-    Serial.printf("Front: %d mm | Right: %d mm\n", frontDistance, rightDistance);
+    // VL53L0X right back sensor
+    VL53L0X_RangingMeasurementData_t measure2;
+    right2TOF.rangingTest(&measure2, false);
+    rightDistance2 = (measure2.RangeStatus != 4) ? measure2.RangeMilliMeter : 8190;
+
     lastTOFRead = currentTime;
   }
 }
 
-// ==================== WALL FOLLOWING CONTROL ====================
-void updateWallFollowing() {
-  if (!wallFollowMode) return;
+// ==================== WALL FOLLOWING PD CONTROL ====================
+/*
+ * Two-error PD Control:
+ * Error_Distance: Average side distance from target
+ * Error_Angle: Difference between front and back sensors (parallelism)
+ */
+void wallFollowPD() {
+  // Calculate average distance to wall
+  float avgRightDist = (rightDistance1 + rightDistance2) / 2.0;
 
-  // Obstacle detection - turn left
-  if (frontDistance < frontGoalDistance) {
-    targetSpeed = wallFollowSpeed;
-    rightTargetSpeed = wallFollowSpeed;
-    Serial.printf("Front obstacle at %d mm - Turning left\n", frontDistance);
-    return;
-  }
+  // Distance error: how far from target distance
+  float distError = avgRightDist - rightGoalDistance1;
 
-  // PD control for wall following
-  float rightError = rightDistance - rightGoalDistance;
-  float rightDerivative = rightError - lastRightError;
-  float steeringCorrection = (wallFollowKp * rightError) + (wallFollowKd * rightDerivative);
+  // Angle error: are we parallel to the wall?
+  float angleError = rightDistance1 - rightDistance2;
 
-  // Apply steering correction
+  // PD control for distance
+  float distDerivative = (distError - lastDistError) / (TOF_READ_PERIOD / 1000.0);
+  float distCorrection = (Kp_dist * distError) + (Kd_dist * distDerivative);
+
+  // P control for angle
+  float angleCorrection = Kp_angle * angleError;
+
+  // Total steering correction
+  float steeringCorrection = distCorrection + angleCorrection;
+
+  // Apply differential steering
   targetSpeed = -(wallFollowSpeed - steeringCorrection);
   rightTargetSpeed = wallFollowSpeed + steeringCorrection;
 
-  lastRightError = rightError;
+  lastDistError = distError;
+}
 
-  Serial.printf("Wall-follow: Front=%dmm Right=%dmm Error=%.1f Correction=%.1f\n",
-                frontDistance, rightDistance, rightError, steeringCorrection);
+// ==================== STATE MACHINE ====================
+void updateStateMachine() {
+  // Always update gyro
+  updateGyroIntegration();
+
+  switch (currentState) {
+
+    // ===== STATE: WALL FOLLOWING =====
+    case STATE_WALL_FOLLOW:
+      wallFollowPD();
+
+      // Transition: Inner corner (obstacle ahead)
+      if (frontDistance < FRONT_STOP_DISTANCE) {
+        Serial.println("Inner corner detected - turning left 90°");
+        currentState = STATE_INNER_CORNER;
+        stateStartTime = millis();
+        stopMotor();
+        resetYaw();
+        targetTurnAngle = 90;  // Turn left
+      }
+
+      // Transition: Outer corner (wall disappeared on front sensor)
+      else if (rightDistance1 > WALL_LOST_THRESHOLD && rightDistance2 < WALL_LOST_THRESHOLD) {
+        Serial.println("Outer corner detected - blind forward");
+        currentState = STATE_BLIND_FORWARD;
+        stateStartTime = millis();
+        targetSpeed = -wallFollowSpeed * 0.6;
+        rightTargetSpeed = wallFollowSpeed * 0.6;
+      }
+      break;
+
+    // ===== STATE: INNER CORNER (90° LEFT TURN) =====
+    case STATE_INNER_CORNER:
+      if (turnByAngle(targetTurnAngle)) {
+        Serial.println("Inner corner turn complete - resuming wall follow");
+        currentState = STATE_WALL_FOLLOW;
+        lastDistError = 0;  // Reset derivative
+      }
+      break;
+
+    // ===== STATE: OUTER CORNER - BLIND FORWARD =====
+    case STATE_BLIND_FORWARD:
+      if (millis() - stateStartTime > BLIND_FORWARD_DURATION) {
+        Serial.println("Blind forward complete - turning right 90°");
+        currentState = STATE_OUTER_CORNER;
+        stopMotor();
+        resetYaw();
+        targetTurnAngle = -90;  // Turn right
+      }
+      break;
+
+    // ===== STATE: OUTER CORNER (90° RIGHT TURN) =====
+    case STATE_OUTER_CORNER:
+      if (turnByAngle(targetTurnAngle)) {
+        Serial.println("Outer corner turn complete - seeking wall");
+        currentState = STATE_SEEK_WALL;
+        targetSpeed = -wallFollowSpeed * 0.5;
+        rightTargetSpeed = wallFollowSpeed * 0.5;
+      }
+      break;
+
+    // ===== STATE: SEEK WALL =====
+    case STATE_SEEK_WALL:
+      if (rightDistance1 < WALL_LOST_THRESHOLD) {
+        Serial.println("Wall found - resuming wall follow");
+        currentState = STATE_WALL_FOLLOW;
+        lastDistError = 0;  // Reset derivative
+      }
+      break;
+
+    // ===== STATE: IDLE =====
+    case STATE_IDLE:
+      stopMotor();
+      break;
+  }
+
+  // Debug output
+  if (millis() - lastPrint > 500) {
+    Serial.printf("State: %d | Front: %d | RF: %d | RB: %d | Yaw: %.1f\n",
+                  currentState, frontDistance, rightDistance1, rightDistance2, currentAngle);
+    lastPrint = millis();
+  }
 }
 
 // ==================== SPEED CALCULATION ====================
@@ -364,14 +566,15 @@ void handleSetPID() {
 }
 
 void handleSetWallFollow() {
-  if (server.hasArg("frontGoal") && server.hasArg("rightGoal")) {
+  if (server.hasArg("frontGoal") && server.hasArg("rightGoal1") && server.hasArg("rightGoal2")) {
     frontGoalDistance = server.arg("frontGoal").toInt();
-    rightGoalDistance = server.arg("rightGoal").toInt();
+    rightGoalDistance1 = server.arg("rightGoal1").toInt();
+    rightGoalDistance2 = server.arg("rightGoal2").toInt();
 
-    server.send(200, "text/plain", "Wall-following goals updated: Front=" + String(frontGoalDistance) + "mm, Right=" + String(rightGoalDistance) + "mm");
-    Serial.printf("Wall goals updated: Front=%d mm, Right=%d mm\n", frontGoalDistance, rightGoalDistance);
+    server.send(200, "text/plain", "Wall-following goals updated: Front=" + String(frontGoalDistance) + "mm, Right1=" + String(rightGoalDistance1) + "mm, Right2=" + String(rightGoalDistance2) + "mm");
+    Serial.printf("Wall goals updated: Front=%d mm, Right1=%d mm, Right2=%d mm\n", frontGoalDistance, rightGoalDistance1, rightGoalDistance2);
   } else {
-    server.send(400, "text/plain", "Missing frontGoal or rightGoal parameter");
+    server.send(400, "text/plain", "Missing goal parameters");
   }
 }
 
@@ -389,15 +592,19 @@ void handleSetWallPID() {
 
 void handleWallFollowMode() {
   if (server.hasArg("enable")) {
-    wallFollowMode = (server.arg("enable") == "true" || server.arg("enable") == "1");
+    bool enable = (server.arg("enable") == "true" || server.arg("enable") == "1");
 
-    if (wallFollowMode) {
-      Serial.println("Wall-following mode ENABLED");
-      server.send(200, "text/plain", "Wall-following mode enabled");
+    if (enable) {
+      currentState = STATE_WALL_FOLLOW;
+      lastDistError = 0;
+      resetYaw();
+      Serial.println("Wall-following started - entering STATE_WALL_FOLLOW");
+      server.send(200, "text/plain", "Wall-following started");
     } else {
-      Serial.println("Wall-following mode DISABLED");
+      currentState = STATE_IDLE;
       stopMotor();
-      server.send(200, "text/plain", "Wall-following mode disabled");
+      Serial.println("Wall-following stopped - entering STATE_IDLE");
+      server.send(200, "text/plain", "Wall-following stopped");
     }
   } else {
     server.send(400, "text/plain", "Missing enable parameter");
@@ -431,14 +638,21 @@ void handleStatus() {
 
   // TOF sensor data
   json += "\"frontDist\":" + String(frontDistance) + ",";
-  json += "\"rightDist\":" + String(rightDistance) + ",";
+  json += "\"rightDist1\":" + String(rightDistance1) + ",";
+  json += "\"rightDist2\":" + String(rightDistance2) + ",";
   json += "\"frontGoal\":" + String(frontGoalDistance) + ",";
-  json += "\"rightGoal\":" + String(rightGoalDistance) + ",";
-  json += "\"wallFollowMode\":" + String(wallFollowMode ? "true" : "false") + ",";
+  json += "\"rightGoal1\":" + String(rightGoalDistance1) + ",";
+  json += "\"rightGoal2\":" + String(rightGoalDistance2) + ",";
+
+  // State machine and IMU
+  json += "\"state\":" + String(currentState) + ",";
+  json += "\"yaw\":" + String(currentAngle, 1) + ",";
+  json += "\"wallFollowMode\":" + String((currentState != STATE_IDLE) ? "true" : "false") + ",";
 
   // Wall-following PD parameters
-  json += "\"wallKp\":" + String(wallFollowKp, 2) + ",";
-  json += "\"wallKd\":" + String(wallFollowKd, 2);
+  json += "\"Kp_dist\":" + String(Kp_dist, 2) + ",";
+  json += "\"Kd_dist\":" + String(Kd_dist, 2) + ",";
+  json += "\"Kp_angle\":" + String(Kp_angle, 2);
   json += "}";
 
   server.send(200, "application/json", json);
@@ -510,15 +724,50 @@ void setup() {
   }
   Serial.println(F("Front sensor (VL53L1X) ready!"));
 
-  // Initialize right sensor (VL53L0X)
-  Serial.println(F("Initializing right sensor (VL53L0X)..."));
+  // Initialize right-front sensor (VL53L0X)
+  Serial.println(F("Initializing right-front sensor (VL53L0X)..."));
   if (!rightTOF.begin()) {
-    Serial.println(F("Failed to boot VL53L0X - Check wiring!"));
+    Serial.println(F("Failed to boot right-front VL53L0X"));
     while(1);
   }
-  Serial.println(F("Right sensor (VL53L0X) ready!"));
+  Serial.println(F("Right-front sensor ready!"));
 
-  Serial.println(F("Both TOF sensors initialized successfully!"));
+  // Initialize right-back sensor (VL53L0X)
+  Serial.println(F("Initializing right-back sensor (VL53L0X)..."));
+  if (!right2TOF.begin()) {
+    Serial.println(F("Failed to boot right-back VL53L0X"));
+    while(1);
+  }
+  Serial.println(F("Right-back sensor ready!"));
+
+  Serial.println(F("All TOF sensors initialized successfully!"));
+
+  // ==================== MPU6050 SETUP ====================
+  Serial.println(F("Initializing MPU6050..."));
+  if (!mpu.begin()) {
+    Serial.println(F("Failed to find MPU6050 chip"));
+    while (1);
+  }
+  Serial.println(F("MPU6050 Found!"));
+
+  // Configure MPU6050
+  mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
+  mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+  mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+
+  // Calibrate gyro (read 100 samples to get offset)
+  Serial.println(F("Calibrating gyro..."));
+  float gyroSum = 0;
+  for (int i = 0; i < 100; i++) {
+    sensors_event_t a, g, temp;
+    mpu.getEvent(&a, &g, &temp);
+    gyroSum += g.gyro.z;
+    delay(10);
+  }
+  gyroZOffset = gyroSum / 100.0;
+  Serial.printf("Gyro Z offset: %.3f rad/s\n", gyroZOffset);
+
+  lastGyroTime = millis();
 
   Serial.println("Hardware configured!");
 
@@ -591,9 +840,9 @@ void loop() {
     calculateSpeed();
   }
 
-  // Wall-following control (if enabled)
-  if (wallFollowMode) {
-    updateWallFollowing();
+  // State machine (if wall-following mode enabled)
+  if (currentState != STATE_IDLE) {
+    updateStateMachine();
   }
 
   // Control loop at specified interval

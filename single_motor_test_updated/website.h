@@ -191,11 +191,16 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
           </div>
         </div>
         <div style="margin-top: 10px; display: flex; gap: 15px; flex-wrap: wrap; align-items: center;">
-          <div style="font-family: monospace; display: flex; gap: 15px;">
+          <div style="font-family: monospace; display: flex; gap: 15px; flex-wrap: wrap;">
             <span>Front: <strong id="frontDistValue">--</strong> mm</span>
-            <span>Right: <strong id="rightDistValue">--</strong> mm</span>
+            <span>Right-F: <strong id="rightDist1Value">--</strong> mm</span>
+            <span>Right-B: <strong id="rightDist2Value">--</strong> mm</span>
           </div>
           <span id="wallFollowStatus" style="padding: 5px 10px; border-radius: 5px; background: #ccc; font-weight: bold;">INACTIVE</span>
+        </div>
+        <div style="margin-top: 10px; padding: 10px; background: white; border-radius: 5px; font-family: monospace;">
+          <strong>State:</strong> <span id="stateDisplay" style="color: #2196F3; font-weight: bold;">IDLE</span> |
+          <strong>Yaw:</strong> <span id="yawDisplay">0.0</span>°
         </div>
         <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #ccc; display: flex; gap: 15px; flex-wrap: wrap; align-items: center;">
           <strong>Wall PD Tuning:</strong>
@@ -514,8 +519,22 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
           if (data.frontDist !== undefined) {
             document.getElementById("frontDistValue").textContent = data.frontDist;
           }
-          if (data.rightDist !== undefined) {
-            document.getElementById("rightDistValue").textContent = data.rightDist;
+          if (data.rightDist1 !== undefined) {
+            document.getElementById("rightDist1Value").textContent = data.rightDist1;
+          }
+          if (data.rightDist2 !== undefined) {
+            document.getElementById("rightDist2Value").textContent = data.rightDist2;
+          }
+
+          // Update state machine
+          if (data.state !== undefined) {
+            const stateNames = ['IDLE', 'WALL FOLLOW', 'INNER CORNER', 'OUTER CORNER', 'BLIND FORWARD', 'SEEK WALL'];
+            document.getElementById("stateDisplay").textContent = stateNames[data.state] || 'UNKNOWN';
+          }
+
+          // Update yaw angle
+          if (data.yaw !== undefined) {
+            document.getElementById("yawDisplay").textContent = data.yaw.toFixed(1);
           }
 
           // Update wall-follow mode status
