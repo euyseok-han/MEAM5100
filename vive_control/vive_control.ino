@@ -16,7 +16,7 @@
 
 // Right motor
 #define RIGHT_ENCODER_A   15
-#define RIGHT_ENCODER_B   16
+#define RIGHT_ENCODER_B   19
 #define RIGHT_MOTOR_RPWM   9
 #define RIGHT_MOTOR_LPWM   8
 
@@ -276,7 +276,6 @@ void handleGoToPoint() {
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.print()
   // Start dual Vive sensors
   viveFront.begin();
   viveBack.begin();
@@ -291,6 +290,7 @@ void setup() {
   ledcAttach(MOTOR_LPWM, PWM_FREQ, PWM_RES);
   ledcAttach(RIGHT_MOTOR_RPWM, PWM_FREQ, PWM_RES);
   ledcAttach(RIGHT_MOTOR_LPWM, PWM_FREQ, PWM_RES);
+  Serial.println("start");
 
   // encoders
   pinMode(ENCODER_A, INPUT_PULLUP);
