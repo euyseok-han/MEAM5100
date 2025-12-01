@@ -155,7 +155,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
       fetch('/gotopoint?x=' + x + '&y=' + y)
         .then(r => r.text())
-        .then(t => alert("GO command sent:\n" + t));
+        .then(t => alert("Moving:\n" + t));
     }
 
     // =================================

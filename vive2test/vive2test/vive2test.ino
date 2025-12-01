@@ -3,7 +3,7 @@
  */
 #include "vive510.h"
 
-#define SIGNALPIN1 34 // pin receiving signal from Vive circuit
+#define SIGNALPIN1 18 // pin receiving signal from Vive circuit
 
 Vive510 vive1(SIGNALPIN1);
 
@@ -43,13 +43,18 @@ void loop() {
       x=0; y=0;
       digitalWrite(LED_BUILTIN,LOW);
     }
+    Serial.print("coord");
+    Serial.print(x0);
+    Serial.print(", ");
+    Serial.println(y0);
   }
   else {
+    Serial.println("not work");
     digitalWrite(LED_BUILTIN,LOW);
     x=0;
     y=0; 
     vive1.sync(5); 
   }
     
-  delay(10);
+  delay(100);
 }

@@ -33,7 +33,7 @@
 #define I2C_SCL           18
 
 // Vive PIN
-#define VIVE_PIN          34
+#define VIVE_PIN          21
 Vive510 vive(VIVE_PIN);
 
 WebServer server(80);
@@ -241,19 +241,19 @@ void viveGoToPoint() {
   if (dist < 80) {
     stopMotor();
     viveNavigationMode = false;
-    Serial.println("Reached Vive target.");
+    Serial.println("Reached target!");
     return;
   }
 
   float desired = atan2(dy, dx);
-  float heading = currentAngle * 3.14159/180.0;
+  float heading = currentAngle * 0.0174533; // deg → rad
   float err = desired - heading;
 
   while (err > 3.14) err -= 6.28;
   while (err < -3.14) err += 6.28;
 
-  float Kp_heading = 180;
-  float Kp_dist = 0.06;
+  float Kp_heading = 150; // turning
+  float Kp_dist = 0.05;   // forward speed
 
   float turn = err * Kp_heading;
   float speed = dist * Kp_dist;
@@ -261,7 +261,7 @@ void viveGoToPoint() {
   turn = constrain(turn, -50, 50);
   speed = constrain(speed, 20, 80);
 
-  targetSpeed = -(speed - turn);
+  targetSpeed = (speed - turn);
   rightTargetSpeed = (speed + turn);
 }
 

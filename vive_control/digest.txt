@@ -1,0 +1,781 @@
+Directory structure:
+└── vive_control/
+    ├── vive510.cpp
+    ├── vive510.h
+    ├── vive_control.ino
+    └── website.h
+
+================================================
+FILE: vive510.cpp
+================================================
+/*
+ * MEAM510 hacks for Vive Interface V2
+ * Dec 2021
+ * Use at your own risk
+ * 
+ * Mark Yim
+ * University of Pennsylvania
+ * copyright (c) 2021 All Rights Reserved
+ */
+
+#include "vive510.h"
+//#define DEBUG
+//#define DEBUG2
+
+portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
+
+// need global interrupt Arduino attachInterrupt won't take member function as interrupt
+// need to pass THIS as arg since all vive object interrupts call same global interrupt 
+void IRAM_ATTR m_pulseISR(void *v) {
+  portENTER_CRITICAL_ISR(&mux);
+  static_cast<Vive510 *>(v)->pulseISR(micros());
+  portEXIT_CRITICAL_ISR(&mux);  
+}
+
+Vive510::Vive510(int pin) {
+  m_pin = pin;
+}
+
+void IRAM_ATTR Vive510::pulseISR(uint32_t us) {
+    if (digitalRead(m_pin)==HIGH) {
+      m_usRising = us;
+    }
+    else { 
+      m_usFalling = us;
+    }
+    if (m_vivestatus == VIVE_RECEIVING)   processPulse();
+}
+
+
+uint16_t Vive510::xCoord(){
+  return m_xCoord;
+}
+
+uint16_t Vive510::yCoord(){
+  return m_yCoord;
+}
+
+int Vive510::isKPulse(uint32_t pulsewidth){
+  if (pulsewidth < 75 || 
+      (pulsewidth > 85 && pulsewidth < 95) || 
+      (pulsewidth > 106 && pulsewidth < 117) ||
+      (pulsewidth > 127 && pulsewidth < 137) 
+  ) return false;
+  else return true;
+}
+
+int Vive510::isJPulse(uint32_t pulsewidth){
+  if (pulsewidth < 75 || 
+      (pulsewidth > 85 && pulsewidth < 95) || 
+      (pulsewidth > 106 && pulsewidth < 117) ||
+      (pulsewidth > 127 && pulsewidth < 137) 
+  ) return true;
+  else return false;
+}
+
+// move checkflag to be backwards checking...think about whether tu link w/spuriuos
+void Vive510::processPulse() {
+ // static int checkflag=0;
+
+  if (m_lastFalling != m_usFalling) {
+    int pulsewidth = m_usFalling-m_usRising;
+    
+    if (pulsewidth > m_sweepWidth) {
+      if (pulsewidth > 140) { //pulse too long. bad pulse
+#ifdef DEBUG2
+        ets_printf("P%d Spur %d width:%d \n",m_pin,m_spurious,pulsewidth);
+#endif
+        m_pulseType = 0;
+      }
+      else if (isKPulse(pulsewidth)) {
+        m_pulseType = KTYPE;
+#ifdef DEBUG
+  ets_printf("\nKPin%d width=%d ", m_pin, pulsewidth);
+#endif
+      } 
+      else if (isJPulse(pulsewidth)) {
+        m_pulseType = JTYPE;
+#ifdef DEBUG
+  ets_printf("\tJPin%d width=%d", m_pin, pulsewidth);
+#endif
+      }
+    }
+    else { // x sweep or y sweep
+#ifdef DEBUG
+      ets_printf("Pin%d:%d  r=%d", m_pin,pulsewidth,m_usRising-m_lastFalling);
+#endif
+      if (m_pulseType == JTYPE)  m_yCoord = m_usRising-m_lastFalling;
+      if (m_pulseType == KTYPE)  m_xCoord = m_usRising-m_lastFalling;
+      
+       m_spurious = 0;
+    }
+    
+    if (m_spurious++ > 60) m_vivestatus=VIVE_SYNC_ONLY; 
+    
+    m_lastFalling = m_usFalling;
+  }
+}
+
+void Vive510::start() {
+  // use ESP32 version of attachInterrupt to allow THIS argument
+  attachInterruptArg(digitalPinToInterrupt(m_pin), m_pulseISR,  this,  CHANGE);
+}
+
+void Vive510::begin() {
+  pinMode(m_pin, INPUT);  
+  start();
+}
+  
+void Vive510::begin(int pin) {
+  m_pin = pin;
+  pinMode(m_pin, INPUT);  
+  start();
+}
+  
+void Vive510::stop() {
+  detachInterrupt(digitalPinToInterrupt(m_pin));
+}
+
+int Vive510::status() {
+  return m_vivestatus;
+}
+
+uint32_t  Vive510::sync(int reps){
+  int i=0;
+  uint32_t m_lastFalling;
+  uint32_t startms = millis();
+  m_lastFalling = m_usFalling;
+  
+  while (millis()-startms < (reps+1)*1000/120) { // count  pulses
+    if (m_lastFalling != m_usFalling) {
+      m_lastFalling = m_usFalling;
+      i++;
+    }
+    yield();
+  }
+
+  if (i == 0) {
+    m_vivestatus = VIVE_NO_SIGNAL; // just for debugging info
+#ifdef DEBUG2
+    ets_printf("no signal ");
+#endif
+  }
+  else if (i < 2*reps) {
+    m_vivestatus = VIVE_SYNC_ONLY; // just for debugging info
+#ifdef DEBUG2
+ ets_printf("missing some pulses %d/%d ",i,2*reps);
+#endif
+  } 
+  else {
+    m_vivestatus = VIVE_RECEIVING;
+#ifdef DEBUG2
+  ets_printf(" Sweep and Sync received ");
+#endif
+  }
+ 
+  return m_vivestatus;
+}
+
+
+
+================================================
+FILE: vive510.h
+================================================
+/*
+ * header for MEAM510 hacks for vive interface
+ * May 2021
+ * Use at your own risk
+ * 
+ */
+
+#ifndef VIVE510
+#define VIVE510
+
+#include <Arduino.h>
+
+// vive status errors
+#define VIVE_NO_SIGNAL 0
+#define VIVE_SYNC_ONLY 1 
+#define VIVE_RECEIVING 2
+
+#define KTYPE 2
+#define JTYPE 1
+
+class Vive510
+{
+private:
+
+  volatile uint32_t m_usRising ; // updated by interrupts 
+  volatile uint32_t m_usFalling ;
+  uint16_t m_xCoord;
+  uint16_t m_yCoord;
+  int m_vivestatus = 0;
+  int m_pin;               // signal input pin
+  int m_sweepWidth=50;
+  int m_pulseType; // 1 is J, 2 is K
+  
+  uint32_t m_lastFalling;
+  int m_spurious;
+
+  int isJPulse(uint32_t pulsewidth);
+  int isKPulse(uint32_t pulsewidth);
+  void processPulse();
+  
+public:
+  Vive510(int pin);
+  uint16_t xCoord();
+  uint16_t yCoord();
+  uint32_t sync(int);
+  int status();
+  void stop();
+  void start();
+  void begin();
+  void begin(int);
+  
+   void  pulseISR(uint32_t); // need public for global interrupt Arduino hack
+};
+
+
+#endif
+
+
+
+================================================
+FILE: vive_control.ino
+================================================
+/*
+ * ESP32-S3 Dual Motor Robot – VIVE Navigation Version
+ * Wall-following code removed entirely.
+ * Uses Vive510 XY coordinates + gyro heading + PID wheel control.
+ */
+
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Wire.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+#include "vive510.h"
+#include "website.h"
+
+// ==================== PIN DEFINITIONS ====================
+#define LEFT_MOTOR         0
+#define RIGHT_MOTOR        1
+
+// Left motor
+#define ENCODER_A          4
+#define ENCODER_B          5
+#define MOTOR_RPWM         6
+#define MOTOR_LPWM         7
+
+// Right motor
+#define RIGHT_ENCODER_A   15
+#define RIGHT_ENCODER_B   16
+#define RIGHT_MOTOR_RPWM   9
+#define RIGHT_MOTOR_LPWM  10
+
+// MPU6050
+#define I2C_SDA            8
+#define I2C_SCL           18
+
+// Vive PIN
+#define VIVE_PIN          21
+Vive510 vive(VIVE_PIN);
+
+WebServer server(80);
+
+const char* ssid = "TP-Link_8A8C";
+const char* password = "12488674";
+
+// ==================== MOTOR & PID ====================
+volatile long encoderCount = 0;
+volatile long lastEncoderCount = 0;
+volatile long rightEncoderCount = 0;
+volatile long rightLastEncoderCount = 0;
+
+float currentSpeed = 0;
+float rightCurrentSpeed = 0;
+float targetSpeed = 0;
+float rightTargetSpeed = 0;
+
+const int PWM_FREQ = 5000;
+const int PWM_RES = 8;
+
+struct PIDController {
+  float Kp = 0.3;
+  float Ki = 1.1;
+  float Kd = 0.0;
+
+  float error, lastError, integral, derivative;
+  float output;
+
+  float integralMax = 100;
+  float integralMin = -100;
+};
+
+PIDController leftPID, rightPID;
+
+// ==================== MPU6050 ====================
+Adafruit_MPU6050 mpu;
+float currentAngle = 0;
+float gyroZOffset = 0;
+unsigned long lastGyroTime = 0;
+
+// ==================== VIVE FILTERS ====================
+uint16_t vx, vy;
+uint16_t vx0, vy0, vx1, vy1, vx2, vy2;
+
+bool viveNavigationMode = false;
+int viveTargetX = 0;
+int viveTargetY = 0;
+
+// ==================== TIMING ====================
+unsigned long lastSpeedCalc = 0;
+unsigned long lastControlUpdate = 0;
+
+const unsigned long SPEED_CALC_PERIOD = 100;
+const unsigned long CONTROL_PERIOD = 50;
+
+// ==================== UTILS ====================
+uint32_t med3(uint32_t a, uint32_t b, uint32_t c) {
+  if ((a <= b) && (a <= c)) return (b <= c) ? b : c;
+  else if ((b <= a) && (b <= c)) return (a <= c) ? a : c;
+  else return (a <= b) ? a : b;
+}
+
+// ==================== ENCODER ISR ====================
+void IRAM_ATTR encoderISR() {
+  if (digitalRead(ENCODER_B)) encoderCount++;
+  else encoderCount--;
+}
+
+void IRAM_ATTR rightEncoderISR() {
+  if (digitalRead(RIGHT_ENCODER_B)) rightEncoderCount++;
+  else rightEncoderCount--;
+}
+
+// ==================== MOTOR CONTROL ====================
+void setMotorPWM(int pwmValue, int motorSide) {
+  pwmValue = pwmValue * 255 / 120;
+  pwmValue = constrain(pwmValue, -255, 255);
+
+  if (motorSide == RIGHT_MOTOR) {
+    pwmValue = -pwmValue;
+    if (pwmValue > 0) {
+      ledcWrite(RIGHT_MOTOR_RPWM, pwmValue);
+      ledcWrite(RIGHT_MOTOR_LPWM, 0);
+    } else {
+      ledcWrite(RIGHT_MOTOR_RPWM, 0);
+      ledcWrite(RIGHT_MOTOR_LPWM, -pwmValue);
+    }
+    return;
+  }
+
+  if (pwmValue > 0) {
+    ledcWrite(MOTOR_RPWM, pwmValue);
+    ledcWrite(MOTOR_LPWM, 0);
+  } else {
+    ledcWrite(MOTOR_RPWM, 0);
+    ledcWrite(MOTOR_LPWM, -pwmValue);
+  }
+}
+
+void stopMotor() {
+  targetSpeed = rightTargetSpeed = 0;
+  leftPID.integral = rightPID.integral = 0;
+  leftPID.lastError = rightPID.lastError = 0;
+}
+
+// ==================== PID ====================
+float calculatePID(PIDController &pid, float target, float current, float dt) {
+  pid.error = target - current;
+  pid.integral += pid.error * dt;
+  pid.integral = constrain(pid.integral, pid.integralMin, pid.integralMax);
+
+  pid.derivative = (pid.error - pid.lastError) / dt;
+  pid.output = pid.Kp * pid.error + pid.Ki * pid.integral + pid.Kd * pid.derivative;
+  pid.lastError = pid.error;
+
+  return pid.output;
+}
+
+void updateMotorControl() {
+  float dt = (millis() - lastControlUpdate) / 1000.0;
+  if (dt <= 0) dt = CONTROL_PERIOD / 1000.0;
+
+  float leftOut = calculatePID(leftPID, targetSpeed, currentSpeed, dt);
+  float rightOut = calculatePID(rightPID, rightTargetSpeed, rightCurrentSpeed, dt);
+
+  setMotorPWM(leftOut, LEFT_MOTOR);
+  setMotorPWM(rightOut, RIGHT_MOTOR);
+}
+
+// ==================== SPEED CALC ====================
+void calculateSpeed() {
+  unsigned long now = millis();
+  float dt = now - lastSpeedCalc;
+
+  if (dt > SPEED_CALC_PERIOD) {
+    long dl = encoderCount - lastEncoderCount;
+    long dr = rightEncoderCount - rightLastEncoderCount;
+
+    currentSpeed = dl / 1400.0 / dt * 1000 * 60;
+    rightCurrentSpeed = dr / 1400.0 / dt * 1000 * 60;
+
+    lastEncoderCount = encoderCount;
+    rightLastEncoderCount = rightEncoderCount;
+    lastSpeedCalc = now;
+  }
+}
+
+// ==================== GYRO ====================
+float readGyroZ() {
+  sensors_event_t a, g, t;
+  mpu.getEvent(&a, &g, &t);
+  return (g.gyro.z - gyroZOffset) * 57.2958;
+}
+
+void updateGyro() {
+  unsigned long now = millis();
+  float dt = (now - lastGyroTime) / 1000.0;
+  if (dt <= 0) return;
+
+  lastGyroTime = now;
+
+  currentAngle += readGyroZ() * dt;
+  while (currentAngle > 180) currentAngle -= 360;
+  while (currentAngle < -180) currentAngle += 360;
+}
+
+void resetYaw() {
+  currentAngle = 0;
+  lastGyroTime = millis();
+}
+
+// ==================== VIVE POSITION ====================
+void readVivePosition() {
+  if (vive.status() != VIVE_RECEIVING) {
+    vx = vy = 0;
+    vive.sync(5);
+    return;
+  }
+
+  vx2 = vx1; vy2 = vy1;
+  vx1 = vx0; vy1 = vy0;
+
+  vx0 = vive.xCoord();
+  vy0 = vive.yCoord();
+
+  vx = med3(vx0, vx1, vx2);
+  vy = med3(vy0, vy1, vy2);
+
+  if (vx > 8000 || vy > 8000 || vx < 1000 || vy < 1000) {
+    vx = vy = 0;
+  }
+}
+
+// ==================== VIVE NAVIGATION ====================
+void viveGoToPoint() {
+  if (!viveNavigationMode) return;
+  if (vx == 0 || vy == 0) { stopMotor(); return; }
+
+  int dx = viveTargetX - vx;
+  int dy = viveTargetY - vy;
+
+  float dist = sqrt(dx*dx + dy*dy);
+
+  if (dist < 80) {
+    stopMotor();
+    viveNavigationMode = false;
+    Serial.println("Reached Vive target.");
+    return;
+  }
+
+  float desired = atan2(dy, dx);
+  float heading = currentAngle * 3.14159/180.0;
+  float err = desired - heading;
+
+  while (err > 3.14) err -= 6.28;
+  while (err < -3.14) err += 6.28;
+
+  float Kp_heading = 180;
+  float Kp_dist = 0.06;
+
+  float turn = err * Kp_heading;
+  float speed = dist * Kp_dist;
+
+  turn = constrain(turn, -50, 50);
+  speed = constrain(speed, 20, 80);
+
+  targetSpeed = -(speed - turn);
+  rightTargetSpeed = (speed + turn);
+}
+
+// ==================== HTTP API ====================
+void handleRoot() { server.send_P(200, "text/html", INDEX_HTML); }
+
+void handleGoToPoint() {
+  if (server.hasArg("x") && server.hasArg("y")) {
+    viveTargetX = server.arg("x").toInt();
+    viveTargetY = server.arg("y").toInt();
+    viveNavigationMode = true;
+
+    resetYaw();
+
+    server.send(200, "text/plain", "Moving to X=" + String(viveTargetX) +
+                                   " Y=" + String(viveTargetY));
+    Serial.printf("Vive Target: %d, %d\n", viveTargetX, viveTargetY);
+  } else {
+    server.send(400, "text/plain", "Missing x or y");
+  }
+}
+
+// ==================== SETUP ====================
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+
+  vive.begin();
+
+  // PWM
+  pinMode(MOTOR_RPWM, OUTPUT);
+  pinMode(MOTOR_LPWM, OUTPUT);
+  pinMode(RIGHT_MOTOR_RPWM, OUTPUT);
+  pinMode(RIGHT_MOTOR_LPWM, OUTPUT);
+
+  ledcAttach(MOTOR_RPWM, PWM_FREQ, PWM_RES);
+  ledcAttach(MOTOR_LPWM, PWM_FREQ, PWM_RES);
+  ledcAttach(RIGHT_MOTOR_RPWM, PWM_FREQ, PWM_RES);
+  ledcAttach(RIGHT_MOTOR_LPWM, PWM_FREQ, PWM_RES);
+
+  // encoders
+  pinMode(ENCODER_A, INPUT_PULLUP);
+  pinMode(ENCODER_B, INPUT_PULLUP);
+  pinMode(RIGHT_ENCODER_A, INPUT_PULLUP);
+  pinMode(RIGHT_ENCODER_B, INPUT_PULLUP);
+
+  attachInterrupt(digitalPinToInterrupt(ENCODER_A), encoderISR, RISING);
+  attachInterrupt(digitalPinToInterrupt(RIGHT_ENCODER_A), rightEncoderISR, RISING);
+
+  // I2C + MPU
+  Wire.begin(I2C_SDA, I2C_SCL);
+  if (!mpu.begin()) while (1) Serial.println("MPU FAIL");
+
+  delay(100);
+  float sum=0;
+  for (int i=0;i<100;i++){
+    sensors_event_t a,g,t;
+    mpu.getEvent(&a,&g,&t);
+    sum+=g.gyro.z;
+    delay(5);
+  }
+  gyroZOffset=sum/100;
+
+  lastGyroTime = millis();
+
+  // WiFi
+  WiFi.begin(ssid, password);
+  while (WiFi.status()!=WL_CONNECTED) { delay(200); }
+
+  server.on("/", handleRoot);
+  server.on("/gotopoint", handleGoToPoint);
+  server.begin();
+
+  lastSpeedCalc = millis();
+  lastControlUpdate = millis();
+}
+
+// ==================== LOOP ====================
+void loop() {
+  server.handleClient();
+
+  updateGyro();
+  readVivePosition();
+
+  if (viveNavigationMode) viveGoToPoint();
+
+  if (millis() - lastSpeedCalc >= SPEED_CALC_PERIOD)
+    calculateSpeed();
+
+  if (millis() - lastControlUpdate >= CONTROL_PERIOD) {
+    updateMotorControl();
+    lastControlUpdate = millis();
+  }
+}
+
+
+
+================================================
+FILE: website.h
+================================================
+#ifndef WEBSITE_H
+#define WEBSITE_H
+
+// Store page in flash (saves RAM on ESP32)
+static const char INDEX_HTML[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Dual Motor Differential Drive + Vive XY Navigation</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { 
+      font-family: Arial; 
+      text-align: center; 
+      margin: 20px; 
+      background-color: #f0f0f0; 
+    }
+    .container { 
+      max-width: 1100px;
+      margin: auto; 
+      background: white; 
+      padding: 20px; 
+      border-radius: 10px; 
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      text-align: left;
+    }
+    h1, h3 {
+      text-align: center;
+      color: #333;
+      margin-top: 0;
+    }
+
+    .layout-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+      margin-top: 20px;
+    }
+    @media (min-width: 768px) {
+      .layout-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    .panel {
+      padding: 15px;
+      border-radius: 8px;
+      background: #f9f9f9;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+    }
+
+    button { 
+      padding: 10px 20px; 
+      margin: 5px;
+      font-size: 16px; 
+      border: none; 
+      border-radius: 5px; 
+      cursor: pointer; 
+      background-color: #4CAF50; 
+      color: white; 
+    }
+    .stop-btn { background-color: #f44336; }
+
+    input[type="number"] {
+      padding: 6px;
+      width: 90px;
+      font-size: 16px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Dual Motor Differential Drive</h1>
+    <h3>Motor Control + Vive Position Navigation</h3>
+
+    <div class="layout-grid">
+
+      <!-- ============================= -->
+      <!-- VIVE XY NAVIGATION PANEL      -->
+      <!-- ============================= -->
+      <div class="panel" style="background:#e3f2fd;">
+        <h3>Vive Coordinate Navigation</h3>
+
+        <div style="display:flex; flex-wrap:wrap; gap:20px; align-items:center;">
+          <div>
+            <label><strong>X Target:</strong></label>
+            <input id="viveX" type="number" value="3000" step="50">
+          </div>
+          <div>
+            <label><strong>Y Target:</strong></label>
+            <input id="viveY" type="number" value="1500" step="50">
+          </div>
+        </div>
+
+        <div style="margin-top:10px;">
+          <button onclick="goToVivePoint()">GO TO POINT</button>
+          <button class="stop-btn" onclick="stopMotor()">STOP</button>
+        </div>
+
+        <div style="margin-top:10px; font-family:monospace;">
+          <strong>Current Vive:</strong>
+          X=<span id="viveXNow">--</span> |
+          Y=<span id="viveYNow">--</span>
+        </div>
+      </div>
+
+      <!-- ============================= -->
+      <!-- Speed / Steering Panel       -->
+      <!-- (Your original content)      -->
+      <!-- ============================= -->
+      <div class="panel" style="background:#f9f9f9;">
+        <!-- (UNCHANGED ORIGINAL MOTOR CONTROL UI) -->
+        <h3>Speed Control</h3>
+        <label>Base Speed: <span id="speedValue">0</span></label>
+        <input type="range" id="speedSlider" min="-120" max="120" value="0" step="10" oninput="updateControl()">
+
+        <label>Steering: <span id="steeringValue">0</span></label>
+        <input type="range" id="steeringSlider" min="-60" max="60" value="0" step="10" oninput="updateControl()">
+
+        <button class="stop-btn" onclick="stopMotor()">STOP</button>
+      </div>
+
+      <!-- ============================= -->
+      <!-- PID Panel (unchanged)        -->
+      <!-- ============================= -->
+      <div class="panel" style="background:#fff3cd;">
+        <h3>PID Tuning</h3>
+        <label>Kp:</label> <input id="kp" type="number" value="0.3" step="0.1" onchange="updatePID()"><br>
+        <label>Ki:</label> <input id="ki" type="number" value="1.5" step="0.1" onchange="updatePID()"><br>
+        <label>Kd:</label> <input id="kd" type="number" value="0" step="0.01" onchange="updatePID()">
+      </div>
+
+      <!-- ============================= -->
+      <!-- Status Panel (unchanged)     -->
+      <!-- ============================= -->
+      <div class="panel" style="background:#e7f3ff; font-family:monospace;">
+        <h3>Status</h3>
+        Left Target: <span id="leftTarget">0</span> |
+        Left Current: <span id="leftCurrent">0</span><br>
+        Right Target: <span id="rightTarget">0</span> |
+        Right Current: <span id="rightCurrent">0</span><br>
+        Vive (X,Y): <span id="viveXNow2">--</span>, <span id="viveYNow2">--</span>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    // ================================
+    // SEND (X,Y) to ESP32
+    // ================================
+    function goToVivePoint() {
+      const x = document.getElementById('viveX').value;
+      const y = document.getElementById('viveY').value;
+  Serial.println("Vive trackers= code started");
+
+      fetch('/gotopoint?x=' + x + '&y=' + y)
+        .then(r => r.text())
+        .then(t => alert("GO command sent:\n" + t));
+    }
+
+    // =================================
+    // Existing control functions remain
+    // =================================
+    function updateControl() {
+      const speed = parseInt(document.getElementById('speedSlider').value);
+      const steering = parseInt(document.getElementById('steeringSlider').value);
+
+      document.getElementById('speedValue').textContent = speed;
+      d
+
+

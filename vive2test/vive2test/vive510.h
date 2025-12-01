@@ -8,7 +8,7 @@
 #ifndef VIVE510
 #define VIVE510
 
-#include <arduino.h>
+#include <Arduino.h>
 
 // vive status errors
 #define VIVE_NO_SIGNAL 0
