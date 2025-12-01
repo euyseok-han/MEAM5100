@@ -1,14 +1,6 @@
-/*
- * ESP32-S3 Dual Motor Robot – VIVE Navigation Version
- * Wall-following code removed entirely.
- * Uses Vive510 XY coordinates + gyro heading + PID wheel control.
- */
-
 #include <WiFi.h>
 #include <WebServer.h>
 #include <Wire.h>
-#include <Adafruit_MPU6050.h>
-#include <Adafruit_Sensor.h>
 #include "vive510.h"
 #include "website.h"
 
@@ -26,15 +18,14 @@
 #define RIGHT_ENCODER_A   15
 #define RIGHT_ENCODER_B   16
 #define RIGHT_MOTOR_RPWM   9
-#define RIGHT_MOTOR_LPWM  10
+#define RIGHT_MOTOR_LPWM   8
 
-// MPU6050
-#define I2C_SDA            8
-#define I2C_SCL           18
+// Vive PINS (front/back)
+#define VIVE_FRONT_PIN 10
+#define VIVE_BACK_PIN  18
 
-// Vive PIN
-#define VIVE_PIN          21
-Vive510 vive(VIVE_PIN);
+Vive510 viveFront(VIVE_FRONT_PIN);
+Vive510 viveBack(VIVE_BACK_PIN);
 
 WebServer server(80);
 
@@ -69,15 +60,16 @@ struct PIDController {
 
 PIDController leftPID, rightPID;
 
-// ==================== MPU6050 ====================
-Adafruit_MPU6050 mpu;
-float currentAngle = 0;
-float gyroZOffset = 0;
-unsigned long lastGyroTime = 0;
+// ==================== MPU6050 (removed) ====================
 
-// ==================== VIVE FILTERS ====================
-uint16_t vx, vy;
-uint16_t vx0, vy0, vx1, vy1, vx2, vy2;
+// ==================== VIVE FILTERS (dual sensors) ====================
+uint16_t fx, fy, bx, by;        // filtered front/back positions
+uint16_t fx0, fy0, fx1, fy1, fx2, fy2;
+uint16_t bx0, by0, bx1, by1, bx2, by2;
+
+// Robot pose from Vive
+float robotX = 0, robotY = 0;
+float robotHeading = 0; // radians
 
 bool viveNavigationMode = false;
 int viveTargetX = 0;
@@ -181,63 +173,65 @@ void calculateSpeed() {
     lastSpeedCalc = now;
   }
 }
+// ==================== VIVE POSITION (dual sensors) ====================
+void readDualVive() {
+  // ======= FRONT SENSOR =======
+  if (viveFront.status() != VIVE_RECEIVING) {
+    fx = fy = 0;
+    viveFront.sync(5);
+  } else {
+    fx2 = fx1; fy2 = fy1;
+    fx1 = fx0; fy1 = fy0;
 
-// ==================== GYRO ====================
-float readGyroZ() {
-  sensors_event_t a, g, t;
-  mpu.getEvent(&a, &g, &t);
-  return (g.gyro.z - gyroZOffset) * 57.2958;
-}
+    fx0 = viveFront.xCoord();
+    fy0 = viveFront.yCoord();
 
-void updateGyro() {
-  unsigned long now = millis();
-  float dt = (now - lastGyroTime) / 1000.0;
-  if (dt <= 0) return;
+    fx = med3(fx0, fx1, fx2);
+    fy = med3(fy0, fy1, fy2);
 
-  lastGyroTime = now;
-
-  currentAngle += readGyroZ() * dt;
-  while (currentAngle > 180) currentAngle -= 360;
-  while (currentAngle < -180) currentAngle += 360;
-}
-
-void resetYaw() {
-  currentAngle = 0;
-  lastGyroTime = millis();
-}
-
-// ==================== VIVE POSITION ====================
-void readVivePosition() {
-  if (vive.status() != VIVE_RECEIVING) {
-    vx = vy = 0;
-    vive.sync(5);
-    return;
+    if (fx < 1000 || fy < 1000 || fx > 8000 || fy > 8000)
+      fx = fy = 0;
   }
 
-  vx2 = vx1; vy2 = vy1;
-  vx1 = vx0; vy1 = vy0;
+  // ======= BACK SENSOR =======
+  if (viveBack.status() != VIVE_RECEIVING) {
+    bx = by = 0;
+    viveBack.sync(5);
+  } else {
+    bx2 = bx1; by2 = by1;
+    bx1 = bx0; by1 = by0;
 
-  vx0 = vive.xCoord();
-  vy0 = vive.yCoord();
+    bx0 = viveBack.xCoord();
+    by0 = viveBack.yCoord();
 
-  vx = med3(vx0, vx1, vx2);
-  vy = med3(vy0, vy1, vy2);
+    bx = med3(bx0, bx1, bx2);
+    by = med3(by0, by1, by2);
 
-  if (vx > 8000 || vy > 8000 || vx < 1000 || vy < 1000) {
-    vx = vy = 0;
+    if (bx < 1000 || by < 1000 || bx > 8000 || by > 8000)
+      bx = by = 0;
   }
+}
+
+void computeVivePose() {
+  if (fx == 0 || fy == 0 || bx == 0 || by == 0) return;
+
+  // Position = midpoint of front/back markers
+  robotX = (fx + bx) / 2.0;
+  robotY = (fy + by) / 2.0;
+
+  // Heading = angle from BACK → FRONT
+  robotHeading = atan2(fy - by, fx - bx);
 }
 
 // ==================== VIVE NAVIGATION ====================
 void viveGoToPoint() {
   if (!viveNavigationMode) return;
-  if (vx == 0 || vy == 0) { stopMotor(); return; }
+  if (robotX == 0 || robotY == 0) { stopMotor(); return; }
 
-  int dx = viveTargetX - vx;
-  int dy = viveTargetY - vy;
+  float dx = viveTargetX - robotX;
+  float dy = viveTargetY - robotY;
 
   float dist = sqrt(dx*dx + dy*dy);
-
   if (dist < 80) {
     stopMotor();
     viveNavigationMode = false;
@@ -246,17 +240,13 @@ void viveGoToPoint() {
   }
 
   float desired = atan2(dy, dx);
-  float heading = currentAngle * 0.0174533; // deg → rad
-  float err = desired - heading;
+  float err = desired - robotHeading;
 
   while (err > 3.14) err -= 6.28;
   while (err < -3.14) err += 6.28;
 
-  float Kp_heading = 150; // turning
-  float Kp_dist = 0.05;   // forward speed
-
-  float turn = err * Kp_heading;
-  float speed = dist * Kp_dist;
+  float turn = err * 150;      // turning
+  float speed = dist * 0.05;   // forward speed
 
   turn = constrain(turn, -50, 50);
   speed = constrain(speed, 20, 80);
@@ -274,8 +264,6 @@ void handleGoToPoint() {
     viveTargetY = server.arg("y").toInt();
     viveNavigationMode = true;
 
-    resetYaw();
-
     server.send(200, "text/plain", "Moving to X=" + String(viveTargetX) +
                                    " Y=" + String(viveTargetY));
     Serial.printf("Vive Target: %d, %d\n", viveTargetX, viveTargetY);
@@ -288,8 +276,10 @@ void handleGoToPoint() {
 void setup() {
   Serial.begin(115200);
   delay(500);
-
-  vive.begin();
+  Serial.print()
+  // Start dual Vive sensors
+  viveFront.begin();
+  viveBack.begin();
 
   // PWM
   pinMode(MOTOR_RPWM, OUTPUT);
@@ -310,31 +300,32 @@ void setup() {
 
   attachInterrupt(digitalPinToInterrupt(ENCODER_A), encoderISR, RISING);
   attachInterrupt(digitalPinToInterrupt(RIGHT_ENCODER_A), rightEncoderISR, RISING);
-
-  // I2C + MPU
-  Wire.begin(I2C_SDA, I2C_SCL);
-  if (!mpu.begin()) while (1) Serial.println("MPU FAIL");
-
-  delay(100);
-  float sum=0;
-  for (int i=0;i<100;i++){
-    sensors_event_t a,g,t;
-    mpu.getEvent(&a,&g,&t);
-    sum+=g.gyro.z;
-    delay(5);
-  }
-  gyroZOffset=sum/100;
-
-  lastGyroTime = millis();
-
-  // WiFi
-  WiFi.begin(ssid, password);
-  while (WiFi.status()!=WL_CONNECTED) { delay(200); }
-
-  server.on("/", handleRoot);
-  server.on("/gotopoint", handleGoToPoint);
+  
   server.begin();
 
+  Serial.print("Connecting to WiFi: ");
+  Serial.println(ssid);
+  WiFi.begin(ssid, password);
+
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 100) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+  Serial.println();
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("WiFi connected!");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+    Serial.println("Open http://192.168.0.111 in your browser");
+  } else {
+    Serial.println("WiFi connection failed!");
+    Serial.println("Check SSID and password");
+  }
+  server.on("/", handleRoot);
+  server.on("/gotopoint", handleGoToPoint);
   lastSpeedCalc = millis();
   lastControlUpdate = millis();
 }
@@ -343,8 +334,9 @@ void setup() {
 void loop() {
   server.handleClient();
 
-  updateGyro();
-  readVivePosition();
+  // Read Vive sensors and compute pose
+  readDualVive();
+  computeVivePose();
 
   if (viveNavigationMode) viveGoToPoint();
 

@@ -105,23 +105,23 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       </div>
 
       <!-- ============================= -->
-      <!-- Speed / Steering Panel       -->
-      <!-- (Your original content)      -->
+      <!-- SPEED / STEERING PANEL        -->
       <!-- ============================= -->
       <div class="panel" style="background:#f9f9f9;">
-        <!-- (UNCHANGED ORIGINAL MOTOR CONTROL UI) -->
         <h3>Speed Control</h3>
         <label>Base Speed: <span id="speedValue">0</span></label>
-        <input type="range" id="speedSlider" min="-120" max="120" value="0" step="10" oninput="updateControl()">
+        <input type="range" id="speedSlider" min="-120" max="120" value="0"
+               step="10" oninput="updateControl()">
 
         <label>Steering: <span id="steeringValue">0</span></label>
-        <input type="range" id="steeringSlider" min="-60" max="60" value="0" step="10" oninput="updateControl()">
+        <input type="range" id="steeringSlider" min="-60" max="60" value="0"
+               step="10" oninput="updateControl()">
 
         <button class="stop-btn" onclick="stopMotor()">STOP</button>
       </div>
 
       <!-- ============================= -->
-      <!-- PID Panel (unchanged)        -->
+      <!-- PID PANEL                     -->
       <!-- ============================= -->
       <div class="panel" style="background:#fff3cd;">
         <h3>PID Tuning</h3>
@@ -131,7 +131,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       </div>
 
       <!-- ============================= -->
-      <!-- Status Panel (unchanged)     -->
+      <!-- STATUS PANEL                  -->
       <!-- ============================= -->
       <div class="panel" style="background:#e7f3ff; font-family:monospace;">
         <h3>Status</h3>
@@ -155,15 +155,63 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
       fetch('/gotopoint?x=' + x + '&y=' + y)
         .then(r => r.text())
-        .then(t => alert("Moving:\n" + t));
+        .then(t => alert("Moving to:\n" + t));
     }
 
-    // =================================
-    // Existing control functions remain
-    // =================================
+    // ================================
+    // SPEED + STEERING UPDATE
+    // ================================
     function updateControl() {
       const speed = parseInt(document.getElementById('speedSlider').value);
       const steering = parseInt(document.getElementById('steeringSlider').value);
 
       document.getElementById('speedValue').textContent = speed;
-      d
+      document.getElementById('steeringValue').textContent = steering;
+
+      fetch(`/control?speed=${speed}&steering=${steering}`);
+    }
+
+    // ================================
+    // STOP MOTOR
+    // ================================
+    function stopMotor() {
+      fetch('/stop');
+    }
+
+    // ================================
+    // UPDATE PID VALUES
+    // ================================
+    function updatePID() {
+      const kp = document.getElementById('kp').value;
+      const ki = document.getElementById('ki').value;
+      const kd = document.getElementById('kd').value;
+
+      fetch(`/pid?kp=${kp}&ki=${ki}&kd=${kd}`);
+    }
+
+    // ================================
+    // LIVE STATUS POLLING
+    // ================================
+    setInterval(() => {
+      fetch('/status')
+        .then(r => r.json())
+        .then(data => {
+          document.getElementById('leftTarget').textContent = data.leftTarget;
+          document.getElementById('leftCurrent').textContent = data.leftCurrent;
+          document.getElementById('rightTarget').textContent = data.rightTarget;
+          document.getElementById('rightCurrent').textContent = data.rightCurrent;
+
+          document.getElementById('viveXNow').textContent = data.vx;
+          document.getElementById('viveYNow').textContent = data.vy;
+          document.getElementById('viveXNow2').textContent = data.vx;
+          document.getElementById('viveYNow2').textContent = data.vy;
+        });
+    }, 200); // update 5 times/s
+
+  </script>
+
+</body>
+</html>
+)rawliteral";
+
+#endif

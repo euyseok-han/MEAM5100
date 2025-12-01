@@ -29,10 +29,10 @@
 #define RIGHT_ENCODER_A   15   // GPIO 15
 #define RIGHT_ENCODER_B   16   // GPIO 16
 #define RIGHT_MOTOR_RPWM   9   // GPIO 9 - Forward
-#define RIGHT_MOTOR_LPWM  10   // GPIO 10 - Reverse
+#define RIGHT_MOTOR_LPWM   8   // GPIO 8 - Reverse
 
 // I2C Sensors (TOF + MPU6050)
-#define I2C_SDA            8   // GPIO 8 (SDA)
+#define I2C_SDA            10   // GPIO 10 (SDA)
 #define I2C_SCL           18   // GPIO 18 (SCL)
 #define TOF_XSHUT_FRONT    1   // GPIO 1 - VL53L1X
 #define TOF_XSHUT_RIGHT    2   // GPIO 2 - VL53L0X
