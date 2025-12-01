@@ -29,10 +29,10 @@
 #define RIGHT_ENCODER_A   15   // GPIO 15
 #define RIGHT_ENCODER_B   16   // GPIO 16
 #define RIGHT_MOTOR_RPWM   9   // GPIO 9 - Forward
-#define RIGHT_MOTOR_LPWM   8   // GPIO 8 - Reverse
+#define RIGHT_MOTOR_LPWM  10   // GPIO 10 - Reverse
 
 // I2C Sensors (TOF + MPU6050)
-#define I2C_SDA            10   // GPIO 10 (SDA)
+#define I2C_SDA            8   // GPIO 8 (SDA)
 #define I2C_SCL           18   // GPIO 18 (SCL)
 #define TOF_XSHUT_FRONT    1   // GPIO 1 - VL53L1X
 #define TOF_XSHUT_RIGHT    2   // GPIO 2 - VL53L0X
@@ -96,6 +96,11 @@ float currentAngle = 0;        // Current orientation angle (degrees)
 float gyroZOffset = 0;         // Gyro Z-axis calibration offset
 unsigned long lastGyroTime = 0;
 
+// Low-pass filter for gyro noise reduction
+const float GYRO_ALPHA = 0.8;        // Low-pass filter coefficient (0.8 = smoother, less noise)
+const float GYRO_DEADBAND = 0.5;     // Ignore readings below this threshold (deg/s)
+float filteredGyroZ = 0.0;           // Filtered gyro Z value
+
 bool wallFollowMode = false;
 int frontGoalDistance = 150;   // mm
 int rightGoalDistance1 = 100;  // mm
@@ -107,6 +112,7 @@ float Kp_dist = 1.5;          // PD gain for distance error
 float Kd_dist = 0.8;          // PD derivative for distance
 float Kp_angle = 2.0;         // P gain for angle error
 float lastDistError = 0;      // For derivative
+unsigned long lastWallFollowUpdate = 0;  // Timestamp for derivative calculation
 
 // ==================== STATE MACHINE ====================
 enum RobotState {
@@ -266,7 +272,19 @@ void updateMotorControl() {
 float readGyroZ() {
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
-  return (g.gyro.z - gyroZOffset) * 57.2958; // Convert rad/s to deg/s
+
+  // Convert rad/s to deg/s and remove offset
+  float gyroZ = (g.gyro.z - gyroZOffset) * 57.2958;
+
+  // Apply low-pass filter to reduce noise
+  filteredGyroZ = GYRO_ALPHA * filteredGyroZ + (1.0 - GYRO_ALPHA) * gyroZ;
+
+  // Apply deadband - ignore small values (noise)
+  if (abs(filteredGyroZ) < GYRO_DEADBAND) {
+    return 0.0;
+  }
+
+  return filteredGyroZ;
 }
 
 void updateGyroIntegration() {
@@ -287,6 +305,7 @@ void updateGyroIntegration() {
 
 void resetYaw() {
   currentAngle = 0;
+  filteredGyroZ = 0.0;  // Reset low-pass filter
   lastGyroTime = millis();
 }
 
@@ -365,6 +384,29 @@ void readTOFSensors() {
  * Error_Angle: Difference between front and back sensors (parallelism)
  */
 void wallFollowPD() {
+  // Rate limiting - only update at TOF_READ_PERIOD intervals
+  unsigned long currentTime = millis();
+  if (lastWallFollowUpdate != 0 && (currentTime - lastWallFollowUpdate) < TOF_READ_PERIOD) {
+    // Too soon since last update, skip this call
+    return;
+  }
+
+  // Check if sensor readings are valid (not out of range)
+  // If sensors read 8190mm, it means no object detected - don't update control
+  if (rightDistance1 > WALL_LOST_THRESHOLD || rightDistance2 > WALL_LOST_THRESHOLD) {
+    // Keep previous motor speeds, don't update PD control
+    return;
+  }
+
+  // Calculate actual time delta for derivative
+  float dt = (currentTime - lastWallFollowUpdate) / 1000.0;  // Convert to seconds
+
+  // Initialize on first call
+  if (lastWallFollowUpdate == 0) {
+    dt = TOF_READ_PERIOD / 1000.0;  // Use expected period
+  }
+  lastWallFollowUpdate = currentTime;
+
   // Calculate average distance to wall
   float avgRightDist = (rightDistance1 + rightDistance2) / 2.0;
 
@@ -374,8 +416,11 @@ void wallFollowPD() {
   // Angle error: are we parallel to the wall?
   float angleError = rightDistance1 - rightDistance2;
 
-  // PD control for distance
-  float distDerivative = (distError - lastDistError) / (TOF_READ_PERIOD / 1000.0);
+  // PD control for distance (time-normalized derivative)
+  float distDerivative = 0;
+  if (dt > 0) {
+    distDerivative = (distError - lastDistError) / dt;
+  }
   float distCorrection = (Kp_dist * distError) + (Kd_dist * distDerivative);
 
   // P control for angle
@@ -412,8 +457,8 @@ void updateStateMachine() {
         targetTurnAngle = 90;  // Turn left
       }
 
-      // Transition: Outer corner (wall disappeared on front sensor)
-      else if (rightDistance1 > WALL_LOST_THRESHOLD && rightDistance2 < WALL_LOST_THRESHOLD) {
+      // Transition: Outer corner (wall disappeared - front sensor loses wall first or both lose it)
+      else if (rightDistance1 > WALL_LOST_THRESHOLD) {
         Serial.println("Outer corner detected - blind forward");
         currentState = STATE_BLIND_FORWARD;
         stateStartTime = millis();
@@ -427,12 +472,18 @@ void updateStateMachine() {
       if (turnByAngle(targetTurnAngle)) {
         Serial.println("Inner corner turn complete - resuming wall follow");
         currentState = STATE_WALL_FOLLOW;
+        resetYaw();  // Reset angle to prevent accumulated error
         lastDistError = 0;  // Reset derivative
+        lastWallFollowUpdate = 0;  // Reset wall follow timer
       }
       break;
 
     // ===== STATE: OUTER CORNER - BLIND FORWARD =====
     case STATE_BLIND_FORWARD:
+      // Maintain forward motion during blind forward
+      targetSpeed = -wallFollowSpeed * 0.6;
+      rightTargetSpeed = wallFollowSpeed * 0.6;
+
       if (millis() - stateStartTime > BLIND_FORWARD_DURATION) {
         Serial.println("Blind forward complete - turning right 90°");
         currentState = STATE_OUTER_CORNER;
@@ -447,17 +498,20 @@ void updateStateMachine() {
       if (turnByAngle(targetTurnAngle)) {
         Serial.println("Outer corner turn complete - seeking wall");
         currentState = STATE_SEEK_WALL;
-        targetSpeed = -wallFollowSpeed * 0.5;
-        rightTargetSpeed = wallFollowSpeed * 0.5;
       }
       break;
 
     // ===== STATE: SEEK WALL =====
     case STATE_SEEK_WALL:
+      // Maintain slow forward motion while seeking wall
+      targetSpeed = -wallFollowSpeed * 0.5;
+      rightTargetSpeed = wallFollowSpeed * 0.5;
+
       if (rightDistance1 < WALL_LOST_THRESHOLD) {
         Serial.println("Wall found - resuming wall follow");
         currentState = STATE_WALL_FOLLOW;
         lastDistError = 0;  // Reset derivative
+        lastWallFollowUpdate = 0;  // Reset wall follow timer
       }
       break;
 
@@ -580,11 +634,11 @@ void handleSetWallFollow() {
 
 void handleSetWallPID() {
   if (server.hasArg("kp") && server.hasArg("kd")) {
-    wallFollowKp = server.arg("kp").toFloat();
-    wallFollowKd = server.arg("kd").toFloat();
+    Kp_dist = server.arg("kp").toFloat();
+    Kd_dist = server.arg("kd").toFloat();
 
-    server.send(200, "text/plain", "Wall-following PD updated: Kp=" + String(wallFollowKp, 2) + ", Kd=" + String(wallFollowKd, 2));
-    Serial.printf("Wall PD updated: Kp=%.2f, Kd=%.2f\n", wallFollowKp, wallFollowKd);
+    server.send(200, "text/plain", "Wall-following PD updated: Kp=" + String(Kp_dist, 2) + ", Kd=" + String(Kd_dist, 2));
+    Serial.printf("Wall PD updated: Kp=%.2f, Kd=%.2f\n", Kp_dist, Kd_dist);
   } else {
     server.send(400, "text/plain", "Missing kp or kd parameter");
   }
@@ -597,6 +651,7 @@ void handleWallFollowMode() {
     if (enable) {
       currentState = STATE_WALL_FOLLOW;
       lastDistError = 0;
+      lastWallFollowUpdate = 0;  // Reset wall follow timer
       resetYaw();
       Serial.println("Wall-following started - entering STATE_WALL_FOLLOW");
       server.send(200, "text/plain", "Wall-following started");
@@ -687,11 +742,11 @@ void setup() {
   
   Serial.println("PWM configured:");
   Serial.println("  Motor 1 (Left):");
-  Serial.println("    GPIO 0 = RPWM (Forward)");
-  Serial.println("    GPIO 1 = LPWM (Reverse)");
-  Serial.println("  Motor 2 (Right):");
   Serial.println("    GPIO 6 = RPWM (Forward)");
   Serial.println("    GPIO 7 = LPWM (Reverse)");
+  Serial.println("  Motor 2 (Right):");
+  Serial.println("    GPIO 9 = RPWM (Forward)");
+  Serial.println("    GPIO 10 = LPWM (Reverse)");
   
   // Configure encoder pins
   pinMode(ENCODER_A, INPUT_PULLUP);
@@ -710,8 +765,21 @@ void setup() {
   Serial.println(F("Initializing TOF sensors..."));
   Wire.begin(I2C_SDA, I2C_SCL);
 
-  // Initialize front sensor (VL53L1X)
+  // Configure XSHUT pins for all TOF sensors
+  pinMode(TOF_XSHUT_FRONT, OUTPUT);
+  pinMode(TOF_XSHUT_RIGHT, OUTPUT);
+  pinMode(TOF_XSHUT_RIGHT2, OUTPUT);
+
+  // Shutdown all sensors initially
+  digitalWrite(TOF_XSHUT_FRONT, LOW);
+  digitalWrite(TOF_XSHUT_RIGHT, LOW);
+  digitalWrite(TOF_XSHUT_RIGHT2, LOW);
+  delay(10);
+
+  // Initialize front sensor (VL53L1X) - activate first
   Serial.println(F("Initializing front sensor (VL53L1X)..."));
+  digitalWrite(TOF_XSHUT_FRONT, HIGH);
+  delay(10);
   if (!frontTOF.begin()) {
     Serial.println(F("Failed to boot VL53L1X - Check wiring!"));
     while(1);
@@ -724,21 +792,25 @@ void setup() {
   }
   Serial.println(F("Front sensor (VL53L1X) ready!"));
 
-  // Initialize right-front sensor (VL53L0X)
+  // Initialize right-front sensor (VL53L0X) - activate and set unique address
   Serial.println(F("Initializing right-front sensor (VL53L0X)..."));
-  if (!rightTOF.begin()) {
+  digitalWrite(TOF_XSHUT_RIGHT, HIGH);
+  delay(10);
+  if (!rightTOF.begin(0x30)) {  // Set unique I2C address
     Serial.println(F("Failed to boot right-front VL53L0X"));
     while(1);
   }
-  Serial.println(F("Right-front sensor ready!"));
+  Serial.println(F("Right-front sensor ready at 0x30!"));
 
-  // Initialize right-back sensor (VL53L0X)
+  // Initialize right-back sensor (VL53L0X) - activate and set unique address
   Serial.println(F("Initializing right-back sensor (VL53L0X)..."));
-  if (!right2TOF.begin()) {
+  digitalWrite(TOF_XSHUT_RIGHT2, HIGH);
+  delay(10);
+  if (!right2TOF.begin(0x31)) {  // Set different I2C address
     Serial.println(F("Failed to boot right-back VL53L0X"));
     while(1);
   }
-  Serial.println(F("Right-back sensor ready!"));
+  Serial.println(F("Right-back sensor ready at 0x31!"));
 
   Serial.println(F("All TOF sensors initialized successfully!"));
 
@@ -753,7 +825,8 @@ void setup() {
   // Configure MPU6050
   mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
   mpu.setGyroRange(MPU6050_RANGE_500_DEG);
-  mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+  // Enable hardware low-pass filter to reduce high-frequency noise (~43Hz bandwidth)
+  mpu.setFilterBandwidth(MPU6050_BAND_44_HZ);
 
   // Calibrate gyro (read 100 samples to get offset)
   Serial.println(F("Calibrating gyro..."));
@@ -766,6 +839,9 @@ void setup() {
   }
   gyroZOffset = gyroSum / 100.0;
   Serial.printf("Gyro Z offset: %.3f rad/s\n", gyroZOffset);
+
+  // Initialize low-pass filter with calibrated zero value
+  filteredGyroZ = 0.0;
 
   lastGyroTime = millis();
 
