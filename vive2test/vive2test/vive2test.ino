@@ -35,7 +35,7 @@ void setup() {
   viveFront.begin();
 
   Serial.println("Vive trackers started!");
-  delay(3000);
+  delay(2000);
 }
 
 // ================= LOOP ==================
@@ -48,11 +48,11 @@ void loop() {
   Coord rear  = {0, 0};
   Coord front = {0, 0};
 
-  // ================== BOTH TRACKERS WORKING ==================
-  if (viveRear.status() == VIVE_RECEIVING &&
-      viveFront.status() == VIVE_RECEIVING) {
+  bool rearValid  = false;
+  bool frontValid = false;
 
-    // ===== shift history for REAR =====
+  // ---------- REAR TRACKER ----------
+  if (viveRear.status() == VIVE_RECEIVING) {
     rx2 = rx1;   ry2 = ry1;
     rx1 = rx0;   ry1 = ry0;
 
@@ -62,7 +62,17 @@ void loop() {
     rear.x = med3filt(rx0, rx1, rx2);
     rear.y = med3filt(ry0, ry1, ry2);
 
-    // ===== shift history for FRONT =====
+    if (!(rear.x > 8000 || rear.y > 8000 || rear.x < 1000 || rear.y < 1000)) {
+      rearValid = true;
+    } else {
+      rear = {0, 0};
+    }
+  } else {
+    viveRear.sync(5);           
+  }
+
+  // ---------- FRONT TRACKER ----------
+  if (viveFront.status() == VIVE_RECEIVING) {
     fx2 = fx1;   fy2 = fy1;
     fx1 = fx0;   fy1 = fy0;
 
@@ -72,37 +82,42 @@ void loop() {
     front.x = med3filt(fx0, fx1, fx2);
     front.y = med3filt(fy0, fy1, fy2);
 
-    // ===== remove outliers =====
-    if (rear.x > 8000 || rear.y > 8000 || rear.x < 1000 || rear.y < 1000)
-      rear = {0,0};
-    if (front.x > 8000 || front.y > 8000 || front.x < 1000 || front.y < 1000)
-      front = {0,0};
-
+    if (!(front.x > 8000 || front.y > 8000 || front.x < 1000 || front.y < 1000)) {
+      frontValid = true;
+    } else {
+      front = {0, 0};
+    }
   } else {
-    Serial.println("Vive not working");
+    viveFront.sync(5);         
   }
 
   // ================== PRINT & ANGLE ==================
+  if (rearValid && frontValid) {
 
-  float dx = (float)front.x - (float)rear.x;
-  float dy = (float)front.y - (float)rear.y;
+    float dx = (float)front.x - (float)rear.x;
+    float dy = (float)front.y - (float)rear.y;
 
-  float angle_rad = atan2(dy, dx);
-  float angle_deg = angle_rad * 180.0f / M_PI;
+    float angle_rad = atan2(dy, dx);
+    float angle_deg = angle_rad * 180.0f / M_PI + 180;
 
-  Serial.print("Rear: (");
-  Serial.print(rear.x); Serial.print(", ");
-  Serial.print(rear.y); Serial.print(")  ");
+    Serial.print("Rear: (");
+    Serial.print(rear.x); Serial.print(", ");
+    Serial.print(rear.y); Serial.print(")  ");
 
-  Serial.print("Front: (");
-  Serial.print(front.x); Serial.print(", ");
-  Serial.print(front.y); Serial.print(")  ");
+    Serial.print("Front: (");
+    Serial.print(front.x); Serial.print(", ");
+    Serial.print(front.y); Serial.print(")  ");
 
-  Serial.print("Angle: ");
-  Serial.print(angle_deg);
-  Serial.println(" deg");
+    Serial.print("Angle: ");
+    Serial.print(angle_deg);
+    Serial.println(" deg");
 
-  digitalWrite(LED_BUILTIN, HIGH);
+    digitalWrite(LED_BUILTIN, HIGH);
 
-  delay(1500);
+  } else {
+    Serial.println("Tracking lost...");
+    digitalWrite(LED_BUILTIN, LOW);
+  }
+
+  delay(300);
 }
