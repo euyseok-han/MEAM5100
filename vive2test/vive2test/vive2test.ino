@@ -2,8 +2,8 @@
 #include <math.h>
 
 // ================= PIN SETUP ==================
-#define SIGNALPIN_REAR   18  
-#define SIGNALPIN_FRONT  10  
+#define SIGNALPIN_REAR   1  
+#define SIGNALPIN_FRONT  14  
 
 Vive510 viveRear(SIGNALPIN_REAR); 
 Vive510 viveFront(SIGNALPIN_FRONT);
@@ -29,13 +29,12 @@ uint32_t med3filt(uint32_t a, uint32_t b, uint32_t c) {
 // ================= SETUP ==================
 void setup() {
   Serial.begin(115200);
-  pinMode(LED_BUILTIN, OUTPUT);
 
   viveRear.begin();
   viveFront.begin();
 
   Serial.println("Vive trackers started!");
-  delay(2000);
+  delay(5000);
 }
 
 // ================= LOOP ==================
@@ -50,7 +49,7 @@ void loop() {
 
   bool rearValid  = false;
   bool frontValid = false;
-
+  Serial.println("loop!");
   // ---------- REAR TRACKER ----------
   if (viveRear.status() == VIVE_RECEIVING) {
     rx2 = rx1;   ry2 = ry1;
@@ -78,7 +77,6 @@ void loop() {
 
     fx0 = viveFront.xCoord();
     fy0 = viveFront.yCoord();
-
     front.x = med3filt(fx0, fx1, fx2);
     front.y = med3filt(fy0, fy1, fy2);
 
@@ -112,11 +110,9 @@ void loop() {
     Serial.print(angle_deg);
     Serial.println(" deg");
 
-    digitalWrite(LED_BUILTIN, HIGH);
 
   } else {
     Serial.println("Tracking lost...");
-    digitalWrite(LED_BUILTIN, LOW);
   }
 
   delay(300);
