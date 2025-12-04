@@ -7,8 +7,9 @@
  *  - Vive dual-marker navigation to a target (X,Y)
  *
  * Notes on pins (ESP32-S3 defaults used in this project):
- *  - I2C remains on SDA=10, SCL=18
- *  - Vive pins moved to 11 (front) and 14 (back) to avoid I2C conflict
+ *  - I2C1 on SDA=11, SCL=12 (Front TOF + Side Front TOF)
+ *  - I2C2 on SDA=19, SCL=20 (IMU + Side Back TOF)
+ *  - Vive pins: 4 (front) and 47 (back)
  *  - RIGHT_ENCODER_B kept at 16 (consistent with manual_and_wall_follow)
  *
  * If your hardware uses different pins, update the defines below.
@@ -24,40 +25,42 @@
 #include <Adafruit_Sensor.h>
 
 #include "website.h"      // Root website with all modes
-#include "vive_control/vive510.h"  // Vive tracker driver (kept in subdir)
+#include "vive510.h"  
 
 // ==================== PIN DEFINITIONS (ESP32-S3) ====================
 #define LEFT_MOTOR           0   // Motor identifier
 #define RIGHT_MOTOR          1   // Motor identifier
 
 // Left Motor & Encoder
-#define ENCODER_A            4   // GPIO 4
-#define ENCODER_B            5   // GPIO 5
-#define MOTOR_RPWM           6   // GPIO 6 - Forward
-#define MOTOR_LPWM           7   // GPIO 7 - Reverse
+#define ENCODER_A            1   // GPIO 1
+#define ENCODER_B            2   // GPIO 2
+#define MOTOR_RPWM          18   // GPIO 18 - Forward
+#define MOTOR_LPWM          17   // GPIO 17 - Reverse
 
 // Right Motor & Encoder
 #define RIGHT_ENCODER_A     15   // GPIO 15
 #define RIGHT_ENCODER_B     16   // GPIO 16
-#define RIGHT_MOTOR_RPWM     9   // GPIO 9 - Forward
-#define RIGHT_MOTOR_LPWM     8   // GPIO 8 - Reverse
+#define RIGHT_MOTOR_RPWM    41   // GPIO 41 - Forward
+#define RIGHT_MOTOR_LPWM    42   // GPIO 42 - Reverse
 
-// I2C Sensors (TOF + MPU6050)
-#define I2C_SDA             10   // GPIO 10 (SDA)
-#define I2C_SCL             18   // GPIO 18 (SCL)
+// I2C 1 (Front TOF + Side Front TOF)
+#define I2C1_SDA            11   // GPIO 11 (SDA)
+#define I2C1_SCL            12   // GPIO 12 (SCL)
+#define TOF_XSHUT_RIGHT1    13   // VL53L0X (side front) XSHUT
+#define TOF_XSHUT_FRONT     14   // VL53L1X (front) XSHUT
 
-// ToF XSHUT pins (for power/reset control)
-#define TOF_XSHUT_FRONT      1   // VL53L1X
-#define TOF_XSHUT_RIGHT      2   // VL53L0X (front-right)
-#define TOF_XSHUT_RIGHT2     3   // VL53L0X (back-right)
+// I2C 2 (IMU + Side Back TOF)
+#define I2C2_SDA            19   // GPIO 19 (SDA)
+#define I2C2_SCL            20   // GPIO 20 (SCL)
+#define TOF_XSHUT_RIGHT2    21   // VL53L0X (side back) XSHUT
 
-// Vive tracker pins (moved off I2C pins)
-#define VIVE_FRONT_PIN      11
-#define VIVE_BACK_PIN       14
+// Vive tracker pins
+#define VIVE_FRONT_PIN       4
+#define VIVE_BACK_PIN       47
 
 // ==================== WIFI ====================
-const char* ssid = "TP-Link_8A8C";
-const char* password = "12488674";
+const char* ssid = "team35_Robot";          // AP name
+const char* password = "35353535";         // AP password (min 8 chars)
 
 WebServer server(80);
 
@@ -99,10 +102,14 @@ struct PIDController {
 PIDController leftPID;
 PIDController rightPID;
 
+// ==================== I2C BUSES ====================
+TwoWire I2C1 = TwoWire(0);  // I2C bus 1 for Front TOF + Side Front TOF
+TwoWire I2C2 = TwoWire(1);  // I2C bus 2 for IMU + Side Back TOF
+
 // ==================== TOF SENSORS ====================
-Adafruit_VL53L1X frontTOF = Adafruit_VL53L1X();
-Adafruit_VL53L0X rightTOF = Adafruit_VL53L0X();
-Adafruit_VL53L0X right2TOF = Adafruit_VL53L0X();
+Adafruit_VL53L1X frontTOF = Adafruit_VL53L1X();   // Front TOF on I2C1
+Adafruit_VL53L0X rightTOF = Adafruit_VL53L0X();   // Side front TOF on I2C1
+Adafruit_VL53L0X right2TOF = Adafruit_VL53L0X();  // Side back TOF on I2C2
 
 int frontDistance = 0;          // mm
 int rightDistance1 = 0;         // mm (front-right)
@@ -144,7 +151,6 @@ enum RobotState {
 RobotState currentState = STATE_IDLE;
 
 // Corner detection thresholds
-const int FRONT_STOP_DISTANCE = 200;   // mm - trigger inner corner turn
 const int WALL_LOST_THRESHOLD = 800;   // mm - trigger outer corner
 const int BLIND_FORWARD_DURATION = 800; // ms - duration to move forward after outer corner
 
@@ -407,7 +413,7 @@ void updateStateMachine() {
       wallFollowPD();
 
       // Transition: Inner corner (obstacle ahead)
-      if (frontDistance < FRONT_STOP_DISTANCE) {
+      if (frontDistance < frontGoalDistance) {
         Serial.println("Inner corner detected - turning left 90°");
         currentState = STATE_INNER_CORNER;
         stateStartTime = millis();
@@ -421,7 +427,7 @@ void updateStateMachine() {
         Serial.println("Outer corner detected - blind forward");
         currentState = STATE_BLIND_FORWARD;
         stateStartTime = millis();
-        targetSpeed = -wallFollowSpeed * 0.6;
+        targetSpeed = wallFollowSpeed * 0.6;
         rightTargetSpeed = wallFollowSpeed * 0.6;
       }
       break;
@@ -440,7 +446,7 @@ void updateStateMachine() {
     // ===== STATE: OUTER CORNER - BLIND FORWARD =====
     case STATE_BLIND_FORWARD:
       // Maintain forward motion during blind forward
-      targetSpeed = -wallFollowSpeed * 0.6;
+      targetSpeed = wallFollowSpeed * 0.6;
       rightTargetSpeed = wallFollowSpeed * 0.6;
 
       if (millis() - stateStartTime > BLIND_FORWARD_DURATION) {
@@ -463,7 +469,7 @@ void updateStateMachine() {
     // ===== STATE: SEEK WALL =====
     case STATE_SEEK_WALL:
       // Maintain slow forward motion while seeking wall
-      targetSpeed = -wallFollowSpeed * 0.5;
+      targetSpeed = wallFollowSpeed * 0.5;
       rightTargetSpeed = wallFollowSpeed * 0.5;
 
       if (rightDistance1 < WALL_LOST_THRESHOLD) {
@@ -598,8 +604,8 @@ void handleControl() {
     steeringValue = server.arg("steering").toFloat();
 
     // Steering positive: turn right -> left wheel faster
-    targetSpeed = -baseSpeed - steeringValue;
-    rightTargetSpeed = baseSpeed - steeringValue;
+    targetSpeed = baseSpeed - steeringValue;
+    rightTargetSpeed = baseSpeed + steeringValue;
 
     targetSpeed = constrain(targetSpeed, -120.0f, 120.0f);
     rightTargetSpeed = constrain(rightTargetSpeed, -120.0f, 120.0f);
@@ -740,19 +746,21 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(ENCODER_A), encoderISR, RISING);
   attachInterrupt(digitalPinToInterrupt(RIGHT_ENCODER_A), rightEncoderISR, RISING);
 
-  // WiFi
-  WiFi.begin(ssid, password);
-  Serial.print("Connecting to WiFi ");
-  Serial.println(ssid);
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts++ < 100) { delay(200); Serial.print('.'); }
-  Serial.println();
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("WiFi connected!");
-    Serial.print("IP: "); Serial.println(WiFi.localIP());
-  } else {
-    Serial.println("WiFi connection failed");
-  }
+  // WiFi AP Mode with Fixed IP
+  WiFi.mode(WIFI_AP);
+
+  // Configure AP IP address (Fixed IP: 192.168.4.1)
+  IPAddress local_IP(192, 168, 4, 1);        // AP IP address
+  IPAddress gateway(192, 168, 4, 1);         // Gateway (same as AP IP)
+  IPAddress subnet(255, 255, 255, 0);        // Subnet mask
+
+  WiFi.softAPConfig(local_IP, gateway, subnet);
+  WiFi.softAP(ssid, password);
+
+  Serial.println("WiFi AP Started!");
+  Serial.print("AP SSID: "); Serial.println(ssid);
+  Serial.print("AP IP Address: "); Serial.println(WiFi.softAPIP());
+  Serial.println("Connect to this network and go to: http://192.168.4.1");
 
   // HTTP routes
   server.on("/", handleRoot);
@@ -767,40 +775,41 @@ void setup() {
   server.on("/gotopoint", handleGoToPoint);
   server.begin();
 
-  // I2C + sensors
-  Wire.begin(I2C_SDA, I2C_SCL);
+  // I2C buses initialization
+  I2C1.begin(I2C1_SDA, I2C1_SCL);
+  I2C2.begin(I2C2_SDA, I2C2_SCL);
 
   pinMode(TOF_XSHUT_FRONT, OUTPUT);
-  pinMode(TOF_XSHUT_RIGHT, OUTPUT);
+  pinMode(TOF_XSHUT_RIGHT1, OUTPUT);
   pinMode(TOF_XSHUT_RIGHT2, OUTPUT);
 
   // Shutdown all sensors initially
   digitalWrite(TOF_XSHUT_FRONT, LOW);
-  digitalWrite(TOF_XSHUT_RIGHT, LOW);
+  digitalWrite(TOF_XSHUT_RIGHT1, LOW);
   digitalWrite(TOF_XSHUT_RIGHT2, LOW);
   delay(10);
 
-  // Initialize front sensor (VL53L1X) - activate first
-  digitalWrite(TOF_XSHUT_FRONT, HIGH);
+  // Initialize side front sensor (VL53L0X on I2C1)
+  digitalWrite(TOF_XSHUT_RIGHT1, HIGH);
   delay(10);
-  if (!frontTOF.begin()) {
-    Serial.println("VL53L1X front init failed!");
+  if (!rightTOF.begin(0x29, false, &I2C1)) {
+    Serial.println("VL53L0X side front (I2C1) init failed!");
   } else {
-    frontTOF.startRanging();
+    Serial.println("VL53L0X side front initialized on I2C1");
   }
 
-  // Initialize right-front sensor (VL53L0X) - activate and set unique address
-  digitalWrite(TOF_XSHUT_RIGHT, HIGH);
+  // Initialize front sensor (VL53L1X on I2C1) - change address to avoid conflict
+  digitalWrite(TOF_XSHUT_FRONT, HIGH);
   delay(10);
-  if (!rightTOF.begin(0x30)) Serial.println("VL53L0X right1 init failed!");
+  if (!frontTOF.begin(0x30, &I2C1)) {
+    Serial.println("VL53L1X front (I2C1) init failed!");
+  } else {
+    frontTOF.startRanging();
+    Serial.println("VL53L1X front initialized on I2C1");
+  }
 
-  // Initialize right-back sensor (VL53L0X) - activate and set unique address
-  digitalWrite(TOF_XSHUT_RIGHT2, HIGH);
-  delay(10);
-  if (!right2TOF.begin(0x31)) Serial.println("VL53L0X right2 init failed!");
-
-  // MPU6050
-  if (mpu.begin()) {
+  // MPU6050 on I2C2
+  if (mpu.begin(0x68, &I2C2)) {
     mpu.setAccelerometerRange(MPU6050_RANGE_4_G);
     mpu.setGyroRange(MPU6050_RANGE_500_DEG);
     mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
@@ -812,8 +821,18 @@ void setup() {
     // Initialize low-pass filter with calibrated zero value
     filteredGyroZ = 0.0;
     lastGyroTime = millis();
+    Serial.println("MPU6050 initialized on I2C2");
   } else {
-    Serial.println("MPU6050 not found");
+    Serial.println("MPU6050 not found on I2C2");
+  }
+
+  // Initialize side back sensor (VL53L0X on I2C2) - no address change needed, it's alone with IMU
+  digitalWrite(TOF_XSHUT_RIGHT2, HIGH);
+  delay(10);
+  if (!right2TOF.begin(0x29, false, &I2C2)) {
+    Serial.println("VL53L0X side back (I2C2) init failed!");
+  } else {
+    Serial.println("VL53L0X side back initialized on I2C2");
   }
 
   // Vive sensors
