@@ -424,24 +424,30 @@ void computeVivePose() {
 
     // Heading = angle from BACK → FRONT
     robotHeading = atan2f((float)fy - (float)by, (float)fx - (float)bx);
-    return;
   }
 
   // CASE 2: only front valid → use front as pose, keep old heading
   if (frontValid && !backValid) {
     robotX = fx;
     robotY = fy;
-    return;
   }
 
   // CASE 3: only back valid → use back as pose, keep old heading
   if (!frontValid && backValid) {
     robotX = bx;
     robotY = by;
-    return;
   }
-
+  
+  Serial.print("X, Y");
+  Serial.print(robotX);
+  Serial.print(", ");
+  Serial.println(robotY);
+  Serial.print("Heading: ");
+  Serial.println(robotHeading);
+  delay(300);
+  return;
   // CASE 4: neither valid → keep last pose & heading
+  
 }
 
 void viveGoToPoint() {
@@ -729,47 +735,48 @@ void setup() {
   server.begin();
 
   // I2C + sensors
-  Wire.begin(I2C_SDA, I2C_SCL);
+  // Wire.begin(I2C_SDA, I2C_SCL);
 
-  pinMode(TOF_XSHUT_FRONT, OUTPUT);
-  pinMode(TOF_XSHUT_RIGHT, OUTPUT);
-  pinMode(TOF_XSHUT_RIGHT2, OUTPUT);
-  digitalWrite(TOF_XSHUT_FRONT, HIGH);
-  digitalWrite(TOF_XSHUT_RIGHT, HIGH);
-  digitalWrite(TOF_XSHUT_RIGHT2, HIGH);
-  delay(10);
+  // pinMode(TOF_XSHUT_FRONT, OUTPUT);
+  // pinMode(TOF_XSHUT_RIGHT, OUTPUT);
+  // pinMode(TOF_XSHUT_RIGHT2, OUTPUT);
+  // digitalWrite(TOF_XSHUT_FRONT, HIGH);
+  // digitalWrite(TOF_XSHUT_RIGHT, HIGH);
+  // digitalWrite(TOF_XSHUT_RIGHT2, HIGH);
+  // delay(10);
 
-  if (!frontTOF.begin()) {
-    Serial.println("VL53L1X front init failed!");
-  } else {
-    frontTOF.startRanging();
-    Serial.println("VL53L1X front init success!");
-  }
+  // if (!frontTOF.begin()) {
+  //   Serial.println("VL53L1X front init failed!");
+  // } else {
+  //   frontTOF.startRanging();
+  //   Serial.println("VL53L1X front init success!");
+  // }
 
-  if (!rightTOF.begin())  Serial.println("VL53L0X right1 init failed!");
-  if (!right2TOF.begin()) Serial.println("VL53L0X right2 init failed!");
+  // if (!rightTOF.begin())  Serial.println("VL53L0X right1 init failed!");
+  // if (!right2TOF.begin()) Serial.println("VL53L0X right2 init failed!");
 
-  // MPU6050
-  if (mpu.begin()) {
-    mpu.setAccelerometerRange(MPU6050_RANGE_4_G);
-    mpu.setGyroRange(MPU6050_RANGE_500_DEG);
-    mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
-    // Calibrate Z offset briefly (assume still)
-    sensors_event_t a, g, temp;
-    float sum = 0;
-    for (int i = 0; i < 50; i++) {
-      mpu.getEvent(&a, &g, &temp);
-      sum += g.gyro.z;
-      delay(10);
-    }
-    gyroZOffset = sum / 50.0f;
-    lastGyroTime = millis();
-    Serial.println("MPU6050 init success!");
-  } else {
-    Serial.println("MPU6050 not found");
-  }
+  // // MPU6050
+  // if (mpu.begin()) {
+  //   mpu.setAccelerometerRange(MPU6050_RANGE_4_G);
+  //   mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+  //   mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+  //   // Calibrate Z offset briefly (assume still)
+  //   sensors_event_t a, g, temp;
+  //   float sum = 0;
+  //   for (int i = 0; i < 50; i++) {
+  //     mpu.getEvent(&a, &g, &temp);
+  //     sum += g.gyro.z;
+  //     delay(10);
+  //   }
+  //   gyroZOffset = sum / 50.0f;
+  //   lastGyroTime = millis();
+  //   Serial.println("MPU6050 init success!");
+  // } else {
+  //   Serial.println("MPU6050 not found");
+  // }
 
   // Vive sensors
+  Serial.println("vive begin");
   viveFront.begin();
   viveBack.begin();
 
@@ -782,8 +789,8 @@ void loop() {
   server.handleClient();
 
   // Sensors
-  updateGyroIntegration();
-  readTOFSensors();
+  // updateGyroIntegration();
+  // readTOFSensors();
   readDualVive();
   computeVivePose();
 
