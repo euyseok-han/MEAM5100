@@ -24,23 +24,25 @@
 #include <Adafruit_Sensor.h>
 
 #include "website.h"      // Root website with all modes
-#include "vive_control/vive510.h"  // Vive tracker driver (kept in subdir)
+#include "vive510.h"  // Vive tracker driver (kept in subdir)
 
 // ==================== PIN DEFINITIONS (ESP32-S3) ====================
-#define LEFT_MOTOR           0   // Motor identifier
-#define RIGHT_MOTOR          1   // Motor identifier
 
-// Left Motor & Encoder
-#define ENCODER_A            4   // GPIO 4
-#define ENCODER_B            5   // GPIO 5
-#define MOTOR_RPWM           6   // GPIO 6 - Forward
-#define MOTOR_LPWM           7   // GPIO 7 - Reverse
 
-// Right Motor & Encoder
-#define RIGHT_ENCODER_A     15   // GPIO 15
-#define RIGHT_ENCODER_B     16   // GPIO 16
-#define RIGHT_MOTOR_RPWM     9   // GPIO 9 - Forward
-#define RIGHT_MOTOR_LPWM     8   // GPIO 8 - Reverse
+#define LEFT_MOTOR         0   // Left motor identifier
+#define RIGHT_MOTOR        1   // Right motor identifier
+
+// Motor 1 (Left Wheel)
+#define ENCODER_A          1   // Left encoder channel A
+#define ENCODER_B          2   // Left encoder channel B
+#define MOTOR_RPWM         18   // Left motor RPWM = Forward direction
+#define MOTOR_LPWM         17   // Left motor LPWM = Reverse direction
+
+// Motor 2 (Right Wheel)
+#define RIGHT_ENCODER_A   15   // Right encoder channel A
+#define RIGHT_ENCODER_B   16   // Right encoder channel B
+#define RIGHT_MOTOR_RPWM   41   // Right motor RPWM = Forward direction
+#define RIGHT_MOTOR_LPWM   42   // Right motor LPWM = Reverse direction
 
 // I2C Sensors (TOF + MPU6050)
 #define I2C_SDA             10   // GPIO 10 (SDA)
@@ -565,6 +567,8 @@ void setup() {
     Serial.println("VL53L1X front init failed!");
   } else {
     frontTOF.startRanging();
+    Serial.println("VL53L1X front init success!");
+
   }
 
   if (!rightTOF.begin()) Serial.println("VL53L0X right1 init failed!");
@@ -581,6 +585,7 @@ void setup() {
     for (int i = 0; i < 50; i++) { mpu.getEvent(&a, &g, &temp); sum += g.gyro.z; delay(10); }
     gyroZOffset = sum / 50.0f;
     lastGyroTime = millis();
+    Serial.println("MPU6050 init success!");
   } else {
     Serial.println("MPU6050 not found");
   }
