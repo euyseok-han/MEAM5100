@@ -44,17 +44,17 @@
 #define RIGHT_MOTOR_LPWM   42  // Right motor LPWM = Reverse direction
 
 // I2C Sensors (TOF + MPU6050)
-#define I2C_SDA            10  // GPIO 10 (SDA)
-#define I2C_SCL            18  // GPIO 18 (SCL)
+#define I2C_SDA            11  // GPIO 10 (SDA)
+#define I2C_SCL            12  // GPIO 18 (SCL)
 
 // ToF XSHUT pins (for power/reset control)
-#define TOF_XSHUT_FRONT     1  // VL53L1X
-#define TOF_XSHUT_RIGHT     2  // VL53L0X (front-right)
-#define TOF_XSHUT_RIGHT2    3  // VL53L0X (back-right)
+#define TOF_XSHUT_FRONT     14  // VL53L1X
+#define TOF_XSHUT_RIGHT     13  // VL53L0X (front-right)
+#define TOF_XSHUT_RIGHT2    21  // VL53L0X (back-right)
 
 // Vive tracker pins (moved off I2C pins)
-#define VIVE_FRONT_PIN     11
-#define VIVE_BACK_PIN      14
+#define VIVE_FRONT_PIN     5
+#define VIVE_BACK_PIN      4
 
 // ==================== WIFI ====================
 const char* ssid = "TP-Link_8A8C";
