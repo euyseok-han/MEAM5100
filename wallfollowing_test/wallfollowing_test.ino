@@ -20,7 +20,6 @@
 #include <Wire.h>
 
 #include <Adafruit_VL53L0X.h>
-#include <Adafruit_VL53L1X.h>
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
 
@@ -64,6 +63,8 @@ const char* password = "35353535";         // AP password (min 8 chars)
 
 WebServer server(80);
 
+IPAddress myIP(192, 168, 1, 188);
+
 // ==================== MOTOR & ENCODER ====================
 volatile long encoderCount = 0;
 long lastEncoderCount = 0;           // Not modified in ISR, doesn't need volatile
@@ -86,7 +87,7 @@ const int PWM_RESOLUTION = 8;  // 0..255
 
 struct PIDController {
   float Kp = 0.3;
-  float Ki = 1.1;
+  float Ki = 1.5;
   float Kd = 0.0;
 
   float error = 0;
@@ -107,7 +108,7 @@ TwoWire I2C1 = TwoWire(0);  // I2C bus 1 for Front TOF + Side Front TOF
 TwoWire I2C2 = TwoWire(1);  // I2C bus 2 for IMU + Side Back TOF
 
 // ==================== TOF SENSORS ====================
-Adafruit_VL53L1X frontTOF = Adafruit_VL53L1X();   // Front TOF on I2C1
+Adafruit_VL53L0X frontTOF = Adafruit_VL53L0X();   // Front TOF on I2C1
 Adafruit_VL53L0X rightTOF = Adafruit_VL53L0X();   // Side front TOF on I2C1
 Adafruit_VL53L0X right2TOF = Adafruit_VL53L0X();  // Side back TOF on I2C2
 
@@ -382,22 +383,35 @@ void readTOFSensors() {
   unsigned long now = millis();
   if (now - lastTOFRead < TOF_READ_PERIOD) return;
 
-  // VL53L1X front (interrupt-driven API)
-  if (frontTOF.dataReady()) {
-    int16_t d = frontTOF.distance();
-    frontDistance = (d > 0) ? d : 8190;
-    frontTOF.clearInterrupt();
+  // VL53L0X front
+  VL53L0X_RangingMeasurementData_t measureFront;
+  frontTOF.rangingTest(&measureFront, false);
+  if (measureFront.RangeStatus != 4) {  // phase failures have incorrect data
+    Serial.print("Front Distance (mm): "); Serial.println(measureFront.RangeMilliMeter);
+    frontDistance = measureFront.RangeMilliMeter;
+  } else {
+    Serial.println(" out of range ");
   }
 
   // VL53L0X right front
-  VL53L0X_RangingMeasurementData_t m1;
-  rightTOF.rangingTest(&m1, false);
-  rightDistance1 = (m1.RangeStatus != 4) ? m1.RangeMilliMeter : 8190;
+  VL53L0X_RangingMeasurementData_t measureRight1;
+  rightTOF.rangingTest(&measureRight1, false);
+  if (measureRight1.RangeStatus != 4) {  // phase failures have incorrect data
+    Serial.print("Side Front Distance (mm): "); Serial.println(measureRight1.RangeMilliMeter);
+    rightDistance1 = measureRight1.RangeMilliMeter;
+  } else {
+    Serial.println(" out of range ");
+  }
 
   // VL53L0X right back
-  VL53L0X_RangingMeasurementData_t m2;
-  right2TOF.rangingTest(&m2, false);
-  rightDistance2 = (m2.RangeStatus != 4) ? m2.RangeMilliMeter : 8190;
+  VL53L0X_RangingMeasurementData_t measureRight2;
+  right2TOF.rangingTest(&measureRight2, false);
+  if (measureRight2.RangeStatus != 4) {  // phase failures have incorrect data
+    Serial.print("Side Back Distance (mm): "); Serial.println(measureRight2.RangeMilliMeter);
+    rightDistance2 = measureRight2.RangeMilliMeter;
+  } else {
+    Serial.println(" out of range ");
+  }
 
   lastTOFRead = now;
 }
@@ -747,20 +761,10 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(RIGHT_ENCODER_A), rightEncoderISR, RISING);
 
   // WiFi AP Mode with Fixed IP
-  WiFi.mode(WIFI_AP);
-
-  // Configure AP IP address (Fixed IP: 192.168.4.1)
-  IPAddress local_IP(192, 168, 4, 1);        // AP IP address
-  IPAddress gateway(192, 168, 4, 1);         // Gateway (same as AP IP)
-  IPAddress subnet(255, 255, 255, 0);        // Subnet mask
-
-  WiFi.softAPConfig(local_IP, gateway, subnet);
   WiFi.softAP(ssid, password);
 
-  Serial.println("WiFi AP Started!");
-  Serial.print("AP SSID: "); Serial.println(ssid);
-  Serial.print("AP IP Address: "); Serial.println(WiFi.softAPIP());
-  Serial.println("Connect to this network and go to: http://192.168.4.1");
+  Serial.print("AP IP address: HTML//");  
+  Serial.println(WiFi.softAPIP());
 
   // HTTP routes
   server.on("/", handleRoot);
@@ -789,23 +793,22 @@ void setup() {
   digitalWrite(TOF_XSHUT_RIGHT2, LOW);
   delay(10);
 
+  // Initialize front sensor (VL53L0X on I2C1)
+  digitalWrite(TOF_XSHUT_FRONT, HIGH);
+  delay(10);
+  if (!frontTOF.begin(0x30, false, &I2C1)) {
+    Serial.println("VL53L0X front (I2C1) init failed!");
+  } else {
+    Serial.println("VL53L0X front initialized on I2C1");
+  }
+
   // Initialize side front sensor (VL53L0X on I2C1)
   digitalWrite(TOF_XSHUT_RIGHT1, HIGH);
   delay(10);
-  if (!rightTOF.begin(0x29, false, &I2C1)) {
+  if (!rightTOF.begin(0x31, false, &I2C1)) {
     Serial.println("VL53L0X side front (I2C1) init failed!");
   } else {
     Serial.println("VL53L0X side front initialized on I2C1");
-  }
-
-  // Initialize front sensor (VL53L1X on I2C1) - change address to avoid conflict
-  digitalWrite(TOF_XSHUT_FRONT, HIGH);
-  delay(10);
-  if (!frontTOF.begin(0x30, &I2C1)) {
-    Serial.println("VL53L1X front (I2C1) init failed!");
-  } else {
-    frontTOF.startRanging();
-    Serial.println("VL53L1X front initialized on I2C1");
   }
 
   // MPU6050 on I2C2
