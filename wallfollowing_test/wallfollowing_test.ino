@@ -49,13 +49,13 @@
 #define TOF_XSHUT_FRONT     14   // VL53L1X (front) XSHUT
 
 // I2C 2 (IMU + Side Back TOF)
-#define I2C2_SDA            19   // GPIO 19 (SDA)
-#define I2C2_SCL            20   // GPIO 20 (SCL)
+#define I2C2_SDA            47   // GPIO 19 (SDA)
+#define I2C2_SCL            48   // GPIO 20 (SCL)
 #define TOF_XSHUT_RIGHT2    21   // VL53L0X (side back) XSHUT
 
 // Vive tracker pins
 #define VIVE_FRONT_PIN       4
-#define VIVE_BACK_PIN       47
+#define VIVE_BACK_PIN        5
 
 // ==================== WIFI ====================
 const char* ssid = "team35_Robot";          // AP name
@@ -780,8 +780,8 @@ void setup() {
   server.begin();
 
   // I2C buses initialization
-  I2C1.begin(I2C1_SDA, I2C1_SCL);
-  I2C2.begin(I2C2_SDA, I2C2_SCL);
+  I2C1.begin(I2C1_SDA, I2C1_SCL, 100000);
+  I2C2.begin(I2C2_SDA, I2C2_SCL, 100000);
 
   pinMode(TOF_XSHUT_FRONT, OUTPUT);
   pinMode(TOF_XSHUT_RIGHT1, OUTPUT);
@@ -802,85 +802,85 @@ void setup() {
     Serial.println("VL53L0X front initialized on I2C1");
   }
 
-  // Initialize side front sensor (VL53L0X on I2C1)
-  digitalWrite(TOF_XSHUT_RIGHT1, HIGH);
-  delay(10);
-  if (!rightTOF.begin(0x31, false, &I2C1)) {
-    Serial.println("VL53L0X side front (I2C1) init failed!");
-  } else {
-    Serial.println("VL53L0X side front initialized on I2C1");
-  }
+  // // Initialize side front sensor (VL53L0X on I2C1)
+  // digitalWrite(TOF_XSHUT_RIGHT1, HIGH);
+  // delay(10);
+  // if (!rightTOF.begin(0x31, false, &I2C1)) {
+  //   Serial.println("VL53L0X side front (I2C1) init failed!");
+  // } else {
+  //   Serial.println("VL53L0X side front initialized on I2C1");
+  // }
 
-  // MPU6050 on I2C2
-  if (mpu.begin(0x68, &I2C2)) {
-    mpu.setAccelerometerRange(MPU6050_RANGE_4_G);
-    mpu.setGyroRange(MPU6050_RANGE_500_DEG);
-    mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
-    // Calibrate Z offset briefly (assume still)
-    sensors_event_t a, g, temp;
-    float sum = 0;
-    for (int i = 0; i < 50; i++) { mpu.getEvent(&a, &g, &temp); sum += g.gyro.z; delay(10); }
-    gyroZOffset = sum / 50.0f;
-    // Initialize low-pass filter with calibrated zero value
-    filteredGyroZ = 0.0;
-    lastGyroTime = millis();
-    Serial.println("MPU6050 initialized on I2C2");
-  } else {
-    Serial.println("MPU6050 not found on I2C2");
-  }
+  // // MPU6050 on I2C2
+  // if (mpu.begin(0x68, &I2C2)) {
+  //   mpu.setAccelerometerRange(MPU6050_RANGE_4_G);
+  //   mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+  //   mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+  //   // Calibrate Z offset briefly (assume still)
+  //   sensors_event_t a, g, temp;
+  //   float sum = 0;
+  //   for (int i = 0; i < 50; i++) { mpu.getEvent(&a, &g, &temp); sum += g.gyro.z; delay(10); }
+  //   gyroZOffset = sum / 50.0f;
+  //   // Initialize low-pass filter with calibrated zero value
+  //   filteredGyroZ = 0.0;
+  //   lastGyroTime = millis();
+  //   Serial.println("MPU6050 initialized on I2C2");
+  // } else {
+  //   Serial.println("MPU6050 not found on I2C2");
+  // }
 
-  // Initialize side back sensor (VL53L0X on I2C2) - no address change needed, it's alone with IMU
-  digitalWrite(TOF_XSHUT_RIGHT2, HIGH);
-  delay(10);
-  if (!right2TOF.begin(0x29, false, &I2C2)) {
-    Serial.println("VL53L0X side back (I2C2) init failed!");
-  } else {
-    Serial.println("VL53L0X side back initialized on I2C2");
-  }
+  // // Initialize side back sensor (VL53L0X on I2C2) - no address change needed, it's alone with IMU
+  // digitalWrite(TOF_XSHUT_RIGHT2, HIGH);
+  // delay(10);
+  // if (!right2TOF.begin(0x29, false, &I2C2)) {
+  //   Serial.println("VL53L0X side back (I2C2) init failed!");
+  // } else {
+  //   Serial.println("VL53L0X side back initialized on I2C2");
+  // }
 
-  // Vive sensors
-  viveFront.begin();
-  viveBack.begin();
+  // // // Vive sensors
+  // // viveFront.begin();
+  // // viveBack.begin();
 
-  lastSpeedCalc = millis();
-  lastControlUpdate = millis();
-  lastTOFRead = millis();
-  lastPrint = millis();
+  // lastSpeedCalc = millis();
+  // lastControlUpdate = millis();
+  // lastTOFRead = millis();
+  // lastPrint = millis();
 }
 
 // ==================== LOOP ====================
 void loop() {
   server.handleClient();
 
-  // Sensors
-  readTOFSensors();
-  readDualVive();
-  computeVivePose();
+  // // Sensors
+  // readTOFSensors();
+  // // readDualVive();
+  // // computeVivePose();
 
-  // Always update gyro for all modes (needed for mode switching)
-  updateGyroIntegration();
+  // // Always update gyro for all modes (needed for mode switching)
+  // updateGyroIntegration();
 
-  // Mode behaviors
-  switch (controlMode) {
-    case MODE_MANUAL:
-      // Targets already set by /control
-      break;
-    case MODE_WALL:
-      if (wallFollowMode) {
-        // State machine also calls updateGyroIntegration(), but it's idempotent
-        updateStateMachine();
-      }
-      break;
-    case MODE_VIVE:
-      viveGoToPoint();
-      break;
-  }
+  // // Mode behaviors
+  // switch (controlMode) {
+  //   case MODE_MANUAL:
+  //     // Targets already set by /control
+  //     break;
+  //   case MODE_WALL:
+  //     if (wallFollowMode) {
+  //       // State machine also calls updateGyroIntegration(), but it's idempotent
+  //       updateStateMachine();
+  //     }
+  //     break;
+  //   case MODE_VIVE:
+  //     viveGoToPoint();
+  //     break;
+  // }
 
-  if (millis() - lastSpeedCalc >= SPEED_CALC_PERIOD) calculateSpeed();
+  // if (millis() - lastSpeedCalc >= SPEED_CALC_PERIOD) calculateSpeed();
 
-  if (millis() - lastControlUpdate >= CONTROL_PERIOD) {
-    updateMotorControl();
-    lastControlUpdate = millis();
-  }
+  // if (millis() - lastControlUpdate >= CONTROL_PERIOD) {
+  //   updateMotorControl();
+  //   lastControlUpdate = millis();
+  // }
 }
 

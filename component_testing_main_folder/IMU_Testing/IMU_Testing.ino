@@ -47,6 +47,8 @@ void updateGyroIntegration() {
   currentAngle += readGyroZdeg() * dt;
   while (currentAngle > 180) currentAngle -= 360;
   while (currentAngle < -180) currentAngle += 360;
+
+  Serial.println(currentAngle);
 }
 
 void resetYaw() {
