@@ -10,7 +10,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     body { 
-      font-family: Arial; 
+      font-family: Arial, sans-serif; 
       text-align: center; 
       margin: 20px; 
       background-color: #f0f0f0; 
@@ -53,11 +53,12 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     .control-section { background: #f9f9f9; }
     .pid-section     { background: #fff3cd; }
     .status          { background: #e7f3ff; font-family: monospace; }
+    .bfs-section     { background: #f5f5f5; }
 
     button { 
-      padding: 15px 30px; 
+      padding: 10px 20px; 
       margin: 5px;
-      font-size: 16px; 
+      font-size: 15px; 
       border: none; 
       border-radius: 5px; 
       cursor: pointer; 
@@ -81,13 +82,59 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     .forward { background: #4CAF50; color: white; }
     .reverse { background: #FF9800; color: white; }
     .stopped { background: #999;     color: white; }
-    .spin    { background: #673ab7; color: white; }
+    .spin    { background: #673ab7;  color: white; }
+
+    .bfs-input-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+    .bfs-input-row input[type="number"] {
+      width: 80px;
+      padding: 4px;
+    }
+
+    #queueBox {
+      margin-top: 8px;
+      padding: 6px;
+      background: #ffffff;
+      border-radius: 4px;
+      border: 1px solid #ddd;
+      font-family: monospace;
+      font-size: 14px;
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>MEAM5100 Robot Control</h1>
-    <h3>Manual Drive · PID Tuning · Live Telemetry · BFS Routing</h3>
+    <h3>Manual Drive · PID Tuning · BFS Route Queue</h3>
+
+    <!-- MODE SELECTION PANEL -->
+    <div class="panel mode-section" style="margin-bottom:15px; text-align:left;">
+      <h3>Mode Selection</h3>
+
+      <label>
+        <input type="radio" name="mode" value="manual" onclick="setMode('manual')">
+        Manual Control
+      </label>
+      <br>
+      <label>
+        <input type="radio" name="mode" value="vive" onclick="setMode('vive')">
+        BFS (Vive Navigation)
+      </label>
+      <br>
+      <label>
+        <input type="radio" name="mode" value="wall" onclick="setMode('wall')">
+        Wall Follow (disabled)
+      </label>
+
+      <div id="modeStatus" style="margin-top:10px; font-weight:bold;">
+        Mode: Unknown
+      </div>
+    </div>
 
     <div id="gamepadStatus"
         style="text-align:center; padding:10px; margin-bottom:15px; 
@@ -125,19 +172,30 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <pre id="statusBox">Loading...</pre>
       </div>
 
-      <!-- =============== BFS ROUTE FINDER PANEL =============== -->
-      <div class="panel" style="background:#e8f4ff;">
-        <h3>BFS Route Finder</h3>
+      <!-- BFS ROUTE PANEL -->
+      <div class="panel bfs-section">
+        <h3>BFS Route Planner</h3>
+        <div class="bfs-input-row">
+          <span>Goal Node Index:</span>
+          <input type="number" id="bfsGoal" min="0" max="15" step="1" value="0">
+          <button onclick="callRoute()">Add Route</button>
+        </div>
+      </div>
 
-        <label>Start Node:</label>
-        <input id="routeStart" type="number" value="0" style="width:80px;"><br><br>
+      <!-- CURRENT ROUTE QUEUE DISPLAY -->
+      <div class="panel" style="background:#fff7e6;">
+        <h3>Route Queue</h3>
+        <div id="queueDisplay" style="font-size:16px; font-weight:bold;">
+            (empty)
+        </div>
+      </div>
 
-        <label>Goal Node:</label>
-        <input id="routeGoal" type="number" value="1" style="width:80px;"><br><br>
-
-        <button onclick="callRoute()">Find Route</button>
-
-        <pre id="routeResult" style="margin-top:10px; font-family:monospace;"></pre>
+      <!-- QUEUE CONTROLS -->
+      <div class="panel" style="background:#eef7ff;">
+        <h3>Queue Controls</h3>
+        <button id="pauseBtn" onclick="toggleQueuePause()">Pause</button>
+        <button onclick="queueSkip()" style="background:#ff9800;">Skip Node</button>
+        <button onclick="queueClear()" class="stop-btn">Clear Queue</button>
       </div>
 
     </div>
@@ -147,6 +205,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     let currentSpeed = 0;
     let currentSteering = 0;
 
+    // ================== DIRECTION INDICATOR ==================
     function updateDirectionIndicator(speed, steering) {
       const d = document.getElementById('direction');
 
@@ -163,10 +222,25 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       }
     }
 
+    // ================== MANUAL CONTROL ==================
     function updateControl() {
       currentSpeed = parseInt(document.getElementById('speedSlider').value);
       currentSteering = parseInt(document.getElementById('steeringSlider').value);
 
+      document.getElementById('speedValue').textContent = currentSpeed;
+      document.getElementById('steeringValue').textContent = currentSteering;
+
+      updateDirectionIndicator(currentSpeed, currentSteering);
+
+      fetch('/setspeed?speed=' + currentSpeed + '&steering=' + currentSteering);
+    }
+
+    function setControl(speed, steering) {
+      currentSpeed = Math.round(speed);
+      currentSteering = Math.round(steering);
+
+      document.getElementById('speedSlider').value = currentSpeed;
+      document.getElementById('steeringSlider').value = currentSteering;
       document.getElementById('speedValue').textContent = currentSpeed;
       document.getElementById('steeringValue').textContent = currentSteering;
 
@@ -180,6 +254,8 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       currentSteering = 0;
       document.getElementById('speedSlider').value = 0;
       document.getElementById('steeringSlider').value = 0;
+      document.getElementById('speedValue').textContent = 0;
+      document.getElementById('steeringValue').textContent = 0;
       updateDirectionIndicator(0, 0);
 
       fetch('/stop');
@@ -190,6 +266,28 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       const ki = document.getElementById('ki').value;
       const kd = document.getElementById('kd').value;
       fetch('/setpid?kp=' + kp + '&ki=' + ki + '&kd=' + kd);
+    }
+
+    // ================== MODE CONTROL ==================
+    function setMode(m) {
+      fetch('/mode?m=' + m)
+        .then(() => refreshStatus());
+    }
+
+    // Sync radio buttons with robot mode coming from /status
+    function updateModeUI(modeInt) {
+      const modes = document.getElementsByName('mode');
+      modes.forEach(r => {
+        if (r.value === 'manual' && modeInt === 0) r.checked = true;
+        if (r.value === 'wall'   && modeInt === 1) r.checked = true;
+        if (r.value === 'vive'   && modeInt === 2) r.checked = true;
+      });
+
+      const modeNames = ['Manual', 'Wall Follow', 'BFS (Vive Navigation)'];
+      const statusEl = document.getElementById('modeStatus');
+      if (statusEl && modeInt >= 0 && modeInt < modeNames.length) {
+        statusEl.textContent = 'Mode: ' + modeNames[modeInt];
+      }
     }
 
     // ================== STATUS UPDATES ==================
@@ -205,9 +303,82 @@ ENC   : L=${data.leftEncoder}  R=${data.rightEncoder}
 POSE  : x=${data.vx}  y=${data.vy}  yaw=${data.yaw}
 MODE  : ${data.mode}`;
           document.getElementById('statusBox').textContent = txt;
+
+          // Update mode UI according to current firmware mode
+          updateModeUI(data.mode);
+
+          // Update pause button from firmware status
+          if (typeof data.paused !== 'undefined') {
+            queuePaused = !!data.paused;
+            updatePauseButton();
+          }
+
+          // Update Queue panel
+          updateQueueUI(data.queue);
+        })
+        .catch(err => {
+          console.log(err);
         });
     }
-    setInterval(refreshStatus, 150);
+    setInterval(refreshStatus, 200);
+
+    // ================== BFS ROUTE CALL ==================
+    function callRoute() {
+      const goal = document.getElementById('bfsGoal').value;
+      if (goal === '') return;
+      fetch('/route?goal=' + goal)
+        .then(r => r.text())
+        .then(t => {
+          console.log('Route response:', t);
+          // Refresh immediately so queue panel updates without waiting
+          refreshStatus();
+        });
+    }
+
+    // ================== QUEUE DISPLAY ==================
+    function updateQueueUI(queueArr) {
+      const el = document.getElementById('queueDisplay');
+      if (!el) return;
+      if (!queueArr || queueArr.length === 0) {
+        el.textContent = '(empty)';
+        return;
+      }
+      el.textContent = '[ ' + queueArr.join(' → ') + ' ]';
+    }
+
+    // ================== QUEUE CONTROL ACTIONS ==================
+    let queuePaused = false;
+
+    function updatePauseButton() {
+      const b = document.getElementById('pauseBtn');
+      if (!b) return;
+      if (queuePaused) {
+        b.textContent = 'Resume';
+        b.style.backgroundColor = '#ff9800';
+      } else {
+        b.textContent = 'Pause';
+        b.style.backgroundColor = '#4CAF50';
+      }
+    }
+
+    function toggleQueuePause() {
+      const next = !queuePaused;
+      fetch('/queue/pause?enable=' + (next ? '1' : '0'))
+        .then(r => r.text())
+        .then(() => {
+          queuePaused = next;
+          updatePauseButton();
+          refreshStatus();
+        });
+    }
+
+    function queueClear() {
+      fetch('/queue/clear').then(() => refreshStatus());
+    }
+
+    function queueSkip() {
+      fetch('/queue/skip').then(() => refreshStatus());
+    }
 
     // ================== GAMEPAD SUPPORT ==================
     let gamepadConnected = false;
@@ -220,17 +391,19 @@ MODE  : ${data.mode}`;
     window.addEventListener("gamepadconnected", (e) => {
       gamepadConnected = true;
       gamepadIndex = e.gamepad.index;
-      document.getElementById('gamepadStatus').textContent =
-        'Xbox Controller: Connected';
-      document.getElementById('gamepadStatus').style.backgroundColor = '#e8f5e9';
-      document.getElementById('gamepadStatus').style.color = '#2e7d32';
+      const s = document.getElementById('gamepadStatus');
+      s.textContent = 'Xbox Controller: Connected';
+      s.style.backgroundColor = '#e8f5e9';
+      s.style.color = '#2e7d32';
     });
 
     window.addEventListener("gamepaddisconnected", () => {
       gamepadConnected = false;
       gamepadIndex = null;
-      document.getElementById('gamepadStatus').textContent =
-        'Xbox Controller: Disconnected';
+      const s = document.getElementById('gamepadStatus');
+      s.textContent = 'Xbox Controller: Disconnected';
+      s.style.backgroundColor = '#ffebee';
+      s.style.color = '#c62828';
       stopMotor();
     });
 
@@ -248,54 +421,39 @@ MODE  : ${data.mode}`;
 
       setControl(speed, steer);
     }
-
-    function setControl(speed, steering) {
-      currentSpeed = Math.round(speed);
-      currentSteering = Math.round(steering);
-
-      document.getElementById('speedSlider').value = currentSpeed;
-      document.getElementById('steeringSlider').value = currentSteering;
-
-      updateDirectionIndicator(speed, steering);
-
-      fetch('/setspeed?speed=' + currentSpeed + '&steering=' + currentSteering);
-    }
-
     setInterval(pollGamepad, 50);
 
     // ================== KEYBOARD CONTROL ==================
     document.addEventListener('keydown', (e) => {
       let handled = false;
 
-      if (e.key === 'ArrowUp') { currentSpeed = Math.min(120, currentSpeed + 10); handled = true; }
-      if (e.key === 'ArrowDown') { currentSpeed = Math.max(-120, currentSpeed - 10); handled = true; }
-      if (e.key === 'ArrowLeft') { currentSteering = Math.max(-60, currentSteering - 5); handled = true; }
-      if (e.key === 'ArrowRight') { currentSteering = Math.min(60, currentSteering + 5); handled = true; }
+      if (e.key === 'ArrowUp') {
+        currentSpeed = Math.min(120, currentSpeed + 10);
+        handled = true;
+      }
+      if (e.key === 'ArrowDown') {
+        currentSpeed = Math.max(-120, currentSpeed - 10);
+        handled = true;
+      }
+      if (e.key === 'ArrowLeft') {
+        currentSteering = Math.max(-60, currentSteering - 5);
+        handled = true;
+      }
+      if (e.key === 'ArrowRight') {
+        currentSteering = Math.min(60, currentSteering + 5);
+        handled = true;
+      }
 
-      if (e.key === 's' || e.key === 'S') { stopMotor(); handled = true; }
+      if (e.key === 's' || e.key === 'S') {
+        stopMotor();
+        handled = true;
+      }
 
       if (handled) {
         e.preventDefault();
         setControl(currentSpeed, currentSteering);
       }
     });
-
-    // ================== BFS ROUTE CALL ==================
-    function callRoute() {
-      const start = document.getElementById("routeStart").value;
-      const goal  = document.getElementById("routeGoal").value;
-
-      fetch(`/route?start=${start}&goal=${goal}`)
-        .then(r => r.text())
-        .then(txt => {
-          document.getElementById("routeResult").textContent =
-            "Route: " + txt;
-        })
-        .catch(err => {
-          document.getElementById("routeResult").textContent =
-            "Error fetching route.";
-        });
-    }
 
   </script>
 </body>

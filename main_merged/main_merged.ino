@@ -1,17 +1,15 @@
 /*
  * MEAM5100 Unified Control - main_merged.ino
  *
- * Combines three modes into one sketch:
- *  - Manual speed + steering with PID speed control (web dashboard /setspeed)
- *  - Wall-following with ToF sensors + simple PD steering
- *  - Vive dual-marker navigation to a target (X,Y)
+ * Modes:
+ *  - MODE_MANUAL: speed + steering with PID speed control (web /setspeed)
+ *  - MODE_WALL:   wall-following with ToF sensors (currently commented out)
+ *  - MODE_VIVE:   Vive-based navigation + queued BFS route following
  *
  * Notes on pins (ESP32-S3 defaults used in this project):
- *  - I2C remains on SDA=10, SCL=18
- *  - Vive pins moved to 11 (front) and 14 (back) to avoid I2C conflict
- *  - RIGHT_ENCODER_B kept at 16 (consistent with manual_and_wall_follow)
- *
- * If your hardware uses different pins, update the defines below.
+ *  - I2C remains on SDA=11, SCL=12
+ *  - Vive pins: 5 (front) and 4 (back)
+ *  - RIGHT_ENCODER_B kept at 16
  */
 
 #include <WiFi.h>
@@ -23,8 +21,13 @@
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
 
-#include "website.h"      // Dashboard UI (manual control, PID, status)
-#include "vive510.h"      // Vive tracker driver (kept in subdir)
+#include <vector>
+#include <queue>
+#include <algorithm>
+#include <math.h>
+
+#include "website.h"      // Dashboard UI
+#include "vive510.h"      // Vive tracker driver
 
 // ==================== PIN DEFINITIONS (ESP32-S3) ====================
 
@@ -44,15 +47,15 @@
 #define RIGHT_MOTOR_LPWM   42  // Right motor LPWM = Reverse direction
 
 // I2C Sensors (TOF + MPU6050)
-#define I2C_SDA            11  // GPIO 10 (SDA)
-#define I2C_SCL            12  // GPIO 18 (SCL)
+#define I2C_SDA            11
+#define I2C_SCL            12
 
 // ToF XSHUT pins (for power/reset control)
 #define TOF_XSHUT_FRONT     14  // VL53L1X
 #define TOF_XSHUT_RIGHT     13  // VL53L0X (front-right)
 #define TOF_XSHUT_RIGHT2    21  // VL53L0X (back-right)
 
-// Vive tracker pins (moved off I2C pins)
+// Vive tracker pins
 #define VIVE_FRONT_PIN     5
 #define VIVE_BACK_PIN      4
 
@@ -62,29 +65,31 @@ const char* password = "12488674";
 
 WebServer server(80);
 
-// ==================== MOTOR & ENCODER ====================
+// ==================== CONTROL CONSTANTS ====================
+const int PWM_FREQ = 5000;
+const int PWM_RESOLUTION = 8;        // 8-bit resolution (0-255)
+const float GOAL_REACHED_THRESHOLD = 200.0f;  // mm radius to consider waypoint reached
+
+// ==================== MOTOR & ENCODER VARIABLES ====================
 volatile long encoderCount = 0;
 volatile long lastEncoderCount = 0;
 volatile long rightEncoderCount = 0;
 volatile long rightLastEncoderCount = 0;
 
+// Speed calculation (RPM)
 float currentSpeed = 0;        // Left RPM
 float rightCurrentSpeed = 0;   // Right RPM
 float targetSpeed = 0;         // Left target RPM
 float rightTargetSpeed = 0;    // Right target RPM
 
-int lastLeftPWM = 0;           // Last applied PWM (0..255)
-int lastRightPWM = 0;          // Last applied PWM (0..255)
+// Speed + steering inputs (manual)
+float baseSpeed = 0;           // Base forward/backward speed
+float steeringValue = 0;       // Steering amount (negative=left, positive=right)
 
-float baseSpeed = 0;           // UI input
-float steeringValue = 0;       // UI input
-
-const int PWM_FREQ = 5000;
-const int PWM_RESOLUTION = 8;  // 0..255
-
+// ==================== PID PARAMETERS ====================
 struct PIDController {
   float Kp = 0.3;
-  float Ki = 1.5;   // match single_motor_test default
+  float Ki = 1.5;
   float Kd = 0.0;
 
   float error = 0;
@@ -100,7 +105,7 @@ struct PIDController {
 PIDController leftPID;
 PIDController rightPID;
 
-// ==================== TOF SENSORS ====================
+// ==================== TOF SENSORS (CURRENTLY UNUSED) ====================
 Adafruit_VL53L1X frontTOF = Adafruit_VL53L1X();
 Adafruit_VL53L0X rightTOF = Adafruit_VL53L0X();
 Adafruit_VL53L0X right2TOF = Adafruit_VL53L0X();
@@ -115,18 +120,17 @@ float currentAngle = 0;         // degrees
 float gyroZOffset = 0;          // rad/s offset converted later
 unsigned long lastGyroTime = 0;
 
-// ==================== WALL FOLLOWING ====================
+// ==================== WALL FOLLOWING (COMMENTED FEATURE) ====================
 bool wallFollowMode = false;
 int frontGoalDistance = 150;    // mm
 int rightGoalDistance1 = 100;   // mm
 int rightGoalDistance2 = 100;   // mm
 float wallFollowSpeed = 40;     // RPM base forward
 
-float lastDistError = 0;        // For derivative
-float wallFollowKp = 1.5;       // PD gains
+float lastDistError = 0;
+float wallFollowKp = 1.5;
 float wallFollowKd = 0.8;
 
-// Simple state enumeration for display (kept minimal)
 enum RobotState {
   STATE_IDLE,
   STATE_WALL_FOLLOW
@@ -147,125 +151,147 @@ ControlMode controlMode = MODE_MANUAL;
 Vive510 viveFront(VIVE_FRONT_PIN);
 Vive510 viveBack(VIVE_BACK_PIN);
 
-uint16_t fx, fy, bx, by;        // filtered front/back positions
+uint16_t fx, fy, bx, by;
 uint16_t fx0, fy0, fx1, fy1, fx2, fy2;
 uint16_t bx0, by0, bx1, by1, bx2, by2;
 
 bool frontValid = false;
 bool backValid  = false;
 
-float robotX = 0, robotY = 0;   // Vive-derived pose
+float robotX = 0, robotY = 0;
 float robotHeading = 0;         // radians
-bool viveNavigationMode = false;
+
 int viveTargetX = 0;
 int viveTargetY = 0;
+int viveDirectionMode = 0;      // 0 = forward, 1 = backward
 
 // ==================== TIMING ====================
 unsigned long lastControlUpdate = 0;
 unsigned long lastSpeedCalc = 0;
 unsigned long lastTOFRead = 0;
+unsigned long lastPrint = 0;
 
 const unsigned long CONTROL_PERIOD     = 50;   // ms
 const unsigned long SPEED_CALC_PERIOD  = 100;  // ms
 const unsigned long TOF_READ_PERIOD    = 50;   // ms
+const uint16_t      Print_PERIOD       = 500;  // ms
 
-// ==================== UTILS ====================
-
+// ==================== GRAPH + BFS ROUTE FINDING ====================
 class Node {
 public:
-    int x, y;
-    std::vector<int> neighbors;
+  int x, y;               // Vive coordinates (mm, or Vive units)
+  std::vector<int> neighbors;
 
-    Node() : x(0), y(0) {}
-    Node(int xCoord, int yCoord, std::vector<int> neigh)
-        : x(xCoord), y(yCoord), neighbors(neigh) {}
+  Node() : x(0), y(0) {}
+  Node(int xCoord, int yCoord, std::vector<int> neigh)
+      : x(xCoord), y(yCoord), neighbors(neigh) {}
 };
 
 class Graph {
 public:
-    std::vector<Node> nodes;
+  std::vector<Node> nodes;
 
-    Graph() {}
+  void addNode(int x, int y, std::vector<int> neigh) {
+    nodes.push_back(Node(x, y, neigh));
+  }
 
-    void addNode(int x, int y, std::vector<int> neigh) {
-        nodes.push_back(Node(x, y, neigh));
+  std::vector<int> bfs(int start, int goal) {
+    int N = nodes.size();
+    if (start < 0 || start >= N || goal < 0 || goal >= N) {
+      return std::vector<int>();
     }
 
-    std::vector<int> bfs(int start, int goal) {
-        int N = nodes.size();
-        std::vector<bool> visited(N, false);
-        std::vector<int> parent(N, -1);
-        std::queue<int> q;
+    std::vector<bool> visited(N, false);
+    std::vector<int> parent(N, -1);
+    std::queue<int> q;
 
-        q.push(start);
-        visited[start] = true;
+    visited[start] = true;
+    q.push(start);
 
-        while (!q.empty()) {
-            int cur = q.front(); q.pop();
+    while (!q.empty()) {
+      int cur = q.front(); q.pop();
 
-            if (cur == goal)
-                return reconstructPath(parent, start, goal);
+      if (cur == goal) {
+        return reconstructPath(parent, start, goal);
+      }
 
-            for (int nb : nodes[cur].neighbors) {
-                if (!visited[nb]) {
-                    visited[nb] = true;
-                    parent[nb] = cur;
-                    q.push(nb);
-                }
-            }
+      for (int nb : nodes[cur].neighbors) {
+        if (nb < 0 || nb >= N) continue;
+        if (!visited[nb]) {
+          visited[nb] = true;
+          parent[nb] = cur;
+          q.push(nb);
         }
-
-        return std::vector<int>(); // empty = no route
+      }
     }
+
+    return std::vector<int>(); // no route
+  }
 
 private:
-    std::vector<int> reconstructPath(std::vector<int>& parent, int start, int goal) {
-        std::vector<int> path;
-        int cur = goal;
+  std::vector<int> reconstructPath(std::vector<int>& parent, int start, int goal) {
+    std::vector<int> path;
+    int cur = goal;
 
-        while (cur != -1) {
-            path.push_back(cur);
-            if (cur == start) break;
-            cur = parent[cur];
-        }
-
-        std::reverse(path.begin(), path.end());
-        return path;
+    while (cur != -1) {
+      path.push_back(cur);
+      if (cur == start) break;
+      cur = parent[cur];
     }
+    std::reverse(path.begin(), path.end());
+    return path;
+  }
 };
 
-// Create global graph
 Graph graph;
 
-// Store latest BFS route so robot can follow it
-std::vector<int> latestRoute;
+// Queue of *node indices* to visit in order
+std::vector<int> nodeQueue;   // front = nodeQueue[0]
+bool queuePaused = false;     // pause following without clearing queue
 
+// ==================== UTILS ====================
+uint16_t filterVive(uint16_t raw, uint16_t last1, uint16_t last2, uint16_t lastGood) {
 
-// (kept for reference; no longer used by Vive)
-uint32_t med3(uint32_t a, uint32_t b, uint32_t c) {
-  if ((a <= b) && (a <= c)) return (b <= c) ? b : c;
-  else if ((b <= a) && (b <= c)) return (a <= c) ? a : c;
-  else return (a <= b) ? a : b;
+    // voting window of previous good values
+    // last1 = most recent, last2 = older
+    // lastGood = global stable value
+    if (robotX == 0 || robotY == 0) return raw;
+    // If any value is clearly invalid (0 or tiny), reject immediately
+    if (raw < 1000 || raw > 9000)
+        return lastGood;
+    
+    // Compute expected next value (smooth motion)
+    // Weighted average vote of history
+    float predicted = 0.5f * last1 + 0.3f * last2 + 0.2f * lastGood;
+
+    // Max allowed change per frame
+    const int MAX_STEP = 250;    // Vive rarely moves >200 in one frame
+                                 // tune 150~300 depending on speed
+
+    // If raw diverges too far from predicted → it's noise → reject
+    if (abs((int)raw - (int)predicted) > MAX_STEP) {
+        return lastGood;   // ignore outlier
+    }
+
+    // Otherwise accept raw and update stable value
+    return raw;
 }
 
-// Robust outlier-rejecting filter for Vive (3-sample window)
-uint16_t filterVive(uint16_t a, uint16_t b, uint16_t c) {
-  uint16_t v0 = a, v1 = b, v2 = c;
+// Find nearest graph node to current Vive pose
+int findNearestNode(float x, float y) {
+  int best = -1;
+  float bestDist = 1e12;
 
-  // sort v0 <= v1 <= v2
-  if (v1 < v0) { uint16_t t = v0; v0 = v1; v1 = t; }
-  if (v2 < v1) { uint16_t t = v1; v1 = v2; v2 = t; }
-  if (v1 < v0) { uint16_t t = v0; v0 = v1; v1 = t; }
-
-  const int TH = 600; // outlier threshold (tune 400–800 if needed)
-
-  if (abs((int)v1 - (int)v0) < TH)
-    return (uint16_t)((v1 + v0) / 2);
-  if (abs((int)v2 - (int)v1) < TH)
-    return (uint16_t)((v2 + v1) / 2);
-
-  // all three far apart → fall back to middle value
-  return v1;
+  for (int i = 0; i < (int)graph.nodes.size(); i++) {
+    float dx = x - graph.nodes[i].x;
+    float dy = y - graph.nodes[i].y;
+    float d2 = dx * dx + dy * dy;
+    if (d2 < bestDist) {
+      bestDist = d2;
+      best = i;
+    }
+  }
+  return best;
 }
 
 // ==================== ENCODER ISR ====================
@@ -281,17 +307,17 @@ void IRAM_ATTR rightEncoderISR() {
 
 // ==================== MOTOR CONTROL ====================
 static inline int pwmFromRPM(float rpm) {
-  int pwm = (int)(rpm * 255.0f / 120.0f); // scale ±120 RPM to ±255 PWM
+  int pwm = (int)(rpm * 255.0f / 120.0f); // map ±120 RPM to ±255 PWM
   return constrain(pwm, -255, 255);
 }
 
 void setMotorPWM(int pwmValue, int motorSide) {
-  // pwmValue is in "PID output space" (RPM-ish), convert to PWM
   int scaled = pwmFromRPM(pwmValue);
 
   if (motorSide == RIGHT_MOTOR) {
     // Invert for right motor wiring
     scaled = -scaled;
+
     if (scaled > 0) {
       ledcWrite(RIGHT_MOTOR_RPWM, scaled);
       ledcWrite(RIGHT_MOTOR_LPWM, 0);
@@ -302,7 +328,6 @@ void setMotorPWM(int pwmValue, int motorSide) {
       ledcWrite(RIGHT_MOTOR_RPWM, 0);
       ledcWrite(RIGHT_MOTOR_LPWM, 0);
     }
-    lastRightPWM = abs(scaled);
     return;
   }
 
@@ -317,7 +342,6 @@ void setMotorPWM(int pwmValue, int motorSide) {
     ledcWrite(MOTOR_RPWM, 0);
     ledcWrite(MOTOR_LPWM, 0);
   }
-  lastLeftPWM = abs(scaled);
 }
 
 void stopMotor() {
@@ -330,21 +354,31 @@ void stopMotor() {
   rightPID.integral = 0; rightPID.lastError = 0;
 }
 
-// ==================== PID ====================
+// ==================== PID CONTROL ====================
 float calculatePID(PIDController &pid, float target, float current, float dt) {
   pid.error = target - current;
+
   pid.integral += pid.error * dt;
   pid.integral = constrain(pid.integral, pid.integralMin, pid.integralMax);
-  pid.derivative = (dt > 0) ? (pid.error - pid.lastError) / dt : 0;
+
+  if (dt > 0) {
+    pid.derivative = (pid.error - pid.lastError) / dt;
+  } else {
+    pid.derivative = 0;
+  }
+
   pid.output = pid.Kp * pid.error + pid.Ki * pid.integral + pid.Kd * pid.derivative;
   pid.lastError = pid.error;
+
   return pid.output;
 }
 
 void updateMotorControl() {
   unsigned long now = millis();
   float dt = (now - lastControlUpdate) / 1000.0f;
-  if (dt <= 0) dt = CONTROL_PERIOD / 1000.0f;
+  if (dt <= 0) {
+    dt = CONTROL_PERIOD / 1000.0f;
+  }
 
   float leftOut  = calculatePID(leftPID,  targetSpeed,      currentSpeed,      dt);
   float rightOut = calculatePID(rightPID, rightTargetSpeed, rightCurrentSpeed, dt);
@@ -353,16 +387,20 @@ void updateMotorControl() {
   setMotorPWM(rightOut, RIGHT_MOTOR);
 }
 
-// ==================== SPEED CALC ====================
+// ==================== SPEED CALCULATION ====================
 void calculateSpeed() {
   unsigned long now = millis();
   float dt = now - lastSpeedCalc;
+
   if (dt > SPEED_CALC_PERIOD) {
     long dl = encoderCount      - lastEncoderCount;
     long dr = rightEncoderCount - rightLastEncoderCount;
 
-    currentSpeed      = dl / 1400.0f / dt * 1000.0f * 60.0f; // rev per ms -> RPM
-    rightCurrentSpeed = dr / 1400.0f / dt * 1000.0f * 60.0f;
+    float revLeft  = dl / 1400.0f;  // 1400 counts per rev
+    float revRight = dr / 1400.0f;
+
+    currentSpeed      = revLeft  / dt * 1000.0f * 60.0f; // RPM
+    rightCurrentSpeed = revRight / dt * 1000.0f * 60.0f;
 
     lastEncoderCount      = encoderCount;
     rightLastEncoderCount = rightEncoderCount;
@@ -370,7 +408,7 @@ void calculateSpeed() {
   }
 }
 
-// ==================== MPU6050 GYRO ====================
+// ==================== GYRO (OPTIONAL, CURRENTLY UNUSED) ====================
 float readGyroZdeg() {
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
@@ -393,78 +431,65 @@ void resetYaw() {
   lastGyroTime = millis();
 }
 
-// ==================== TOF READ ====================
+// ==================== TOF READ (COMMENTED OUT FEATURE) ====================
 void readTOFSensors() {
   unsigned long now = millis();
   if (now - lastTOFRead < TOF_READ_PERIOD) return;
 
-  // VL53L1X front (interrupt-driven API)
+  // FRONT VL53L1X & right VL53L0X sensors are currently disabled
+  /*
   if (frontTOF.dataReady()) {
     int16_t d = frontTOF.distance();
     frontDistance = (d > 0) ? d : 8190;
     frontTOF.clearInterrupt();
   }
 
-  // VL53L0X right front
   VL53L0X_RangingMeasurementData_t m1;
   rightTOF.rangingTest(&m1, false);
   rightDistance1 = (m1.RangeStatus != 4) ? m1.RangeMilliMeter : 8190;
 
-  // VL53L0X right back
   VL53L0X_RangingMeasurementData_t m2;
   right2TOF.rangingTest(&m2, false);
   rightDistance2 = (m2.RangeStatus != 4) ? m2.RangeMilliMeter : 8190;
+  */
 
   lastTOFRead = now;
 }
 
-// ==================== WALL FOLLOW (PD) ====================
+// ==================== WALL FOLLOW PD (COMMENTED OUT FEATURE) ====================
 void wallFollowPD() {
-  // average side distance
-  float avgRight = (rightDistance1 + rightDistance2) / 2.0f;
-  float distError = avgRight - rightGoalDistance1; // goal uses rightGoalDistance1
-
-  float deri = (distError - lastDistError) / (TOF_READ_PERIOD / 1000.0f);
-  lastDistError = distError;
-
-  float steer = wallFollowKp * distError + wallFollowKd * deri;
-  steer = constrain(steer, -60, 60);
-
-  // Set wheel targets (left faster when turning right => steering positive)
-  targetSpeed      = wallFollowSpeed - steer;
-  rightTargetSpeed = wallFollowSpeed + steer;
+  // Placeholder for future wall-follow PD (disabled for now)
 }
 
 // ==================== VIVE READ + NAV ====================
-
-// New robust dual-Vive read with sync + outlier rejection
 void readDualVive() {
   frontValid = false;
   backValid  = false;
 
-  // ===== FRONT VIVE =====
+  // FRONT VIVE
   if (viveFront.status() != VIVE_RECEIVING) {
     viveFront.sync(5);
   } else {
-    // shift history
+    // shift history of filtered values
     fx2 = fx1; fy2 = fy1;
     fx1 = fx0; fy1 = fy0;
 
+    // new raw samples
     fx0 = viveFront.xCoord();
     fy0 = viveFront.yCoord();
 
-    uint16_t fxf = filterVive(fx0, fx1, fx2);
-    uint16_t fyf = filterVive(fy0, fy1, fy2);
+    // continuity-based filter using lastGood = fx/fy
+    uint16_t fxf = filterVive(fx0, fx1, fx2, fx);
+    uint16_t fyf = filterVive(fy0, fy1, fy2, fy);
 
-    // validity check
-    if (fxf > 1000 && fyf > 1000 && fxf < 8000 && fyf < 8000) {
+    if (fxf > 0 && fyf > 0) {
       fx = fxf;
       fy = fyf;
       frontValid = true;
     }
   }
 
-  // ===== BACK VIVE =====
+  // BACK VIVE
   if (viveBack.status() != VIVE_RECEIVING) {
     viveBack.sync(5);
   } else {
@@ -474,10 +499,10 @@ void readDualVive() {
     bx0 = viveBack.xCoord();
     by0 = viveBack.yCoord();
 
-    uint16_t bxf = filterVive(bx0, bx1, bx2);
-    uint16_t byf = filterVive(by0, by1, by2);
+    uint16_t bxf = filterVive(bx0, bx1, bx2, bx);
+    uint16_t byf = filterVive(by0, by1, by2, by);
 
-    if (bxf > 1000 && byf > 1000 && bxf < 8000 && byf < 8000) {
+    if (bxf > 0 && byf > 0) {
       bx = bxf;
       by = byf;
       backValid = true;
@@ -485,138 +510,146 @@ void readDualVive() {
   }
 }
 
-// New robust pose computation with single-sensor fallback
 void computeVivePose() {
-  // CASE 1: both sensors valid → best pose (midpoint + heading)
   if (frontValid && backValid) {
     robotX = (fx + bx) / 2.0f;
     robotY = (fy + by) / 2.0f;
 
-    // Heading = angle from BACK → FRONT
     robotHeading = atan2f((float)fy - (float)by, (float)fx - (float)bx);
-  }
-
-  // CASE 2: only front valid → use front as pose, keep old heading
-  if (frontValid && !backValid) {
+  } else if (frontValid && !backValid) {
     robotX = fx;
     robotY = fy;
-  }
-
-  // CASE 3: only back valid → use back as pose, keep old heading
-  if (!frontValid && backValid) {
+  } else if (!frontValid && backValid) {
     robotX = bx;
     robotY = by;
+  } else {
+    // Explicitly mark pose invalid
+    robotX = 0;
+    robotY = 0;
   }
-  
-  Serial.print("X, Y");
-  Serial.print(robotX);
-  Serial.print(", ");
-  Serial.println(robotY);
-  Serial.print("Heading: ");
-  Serial.println(robotHeading);
-  delay(300);
-  return;
-  // CASE 4: neither valid → keep last pose & heading
-  
 }
 
-void viveGoToPoint() {
-  if (!viveNavigationMode) return;
+bool vivePoseValid() {
+  return !(robotX == 0 && robotY == 0);
+}
 
+// Low-level Vive go-to-point step: returns true if goal reached
+bool viveGoToPointStep() {
   if (!frontValid && !backValid) {
     stopMotor();
-    return;
+    return false;
+  }
+
+  if (!vivePoseValid()) {
+    Serial.println("Skipping goto: Vive invalid (0,0)");
+    stopMotor();
+    return false;
   }
 
   float dx = (float)viveTargetX - robotX;
   float dy = (float)viveTargetY - robotY;
   float dist = sqrtf(dx * dx + dy * dy);
 
-  if (dist < 80) {
+  // Reached current goal
+  if (dist < GOAL_REACHED_THRESHOLD) {
     stopMotor();
-    viveNavigationMode = false;
-    return;
+    return true;
   }
 
   float desired = atan2f(dy, dx);
+
+  // Backward approach: flip target heading 180 degrees
+  if (viveDirectionMode == 1) {
+    desired += 3.14159265f;
+    if (desired > 3.14159265f) desired -= 6.2831853f;
+  }
+
   float err = desired - robotHeading;
   while (err >  3.14159f) err -= 6.28318f;
   while (err < -3.14159f) err += 6.28318f;
 
-  float turn  = err  * 150.0f;   // turning term
-  float speed = dist * 0.05f;    // forward term
+  float turn  = err  * 150.0f;
+  float speed = dist * 0.05f;
 
-  turn  = constrain((int)turn,  -50, 50);
-  speed = constrain((int)speed, 20, 80);
+  turn = constrain((int)turn, -50, 50);
+
+  if (viveDirectionMode == 0) {
+    // Forward
+    speed = constrain((int)speed, 20, 80);
+  } else {
+    // Backward
+    speed = -constrain((int)speed, 20, 80);
+  }
 
   targetSpeed      = speed - turn;
   rightTargetSpeed = speed + turn;
+
+  return false;
+}
+
+// Queue-based BFS navigation: follow first node in nodeQueue
+void followQueueStep() {
+  if (!vivePoseValid()) {
+    Serial.println("Skipping queue follow: Vive invalid (0,0)");
+    stopMotor();
+    return;
+  }
+
+  if (nodeQueue.empty()) {
+    stopMotor();
+    return;
+  }
+
+  int currentNode = nodeQueue.front();
+
+  // Set current target to this node's coordinate
+  viveTargetX = graph.nodes[currentNode].x;
+  viveTargetY = graph.nodes[currentNode].y;
+
+  bool reached = viveGoToPointStep();
+
+  if (reached) {
+    int removed = nodeQueue.front();
+    nodeQueue.erase(nodeQueue.begin());
+    Serial.printf("Reached node %d. Next queue:\n", removed);
+
+    // Print new queue state
+    Serial.print("QUEUE: [");
+    for (int i = 0; i < (int)nodeQueue.size(); i++) {
+      Serial.print(nodeQueue[i]);
+      if (i < (int)nodeQueue.size() - 1) Serial.print(",");
+    }
+    Serial.println("]");
+  }
 }
 
 // ==================== WEB SERVER HANDLERS ====================
 
-// Root – your dashboard HTML
+// Root – dashboard HTML
 void handleRoot() {
   server.send_P(200, "text/html", INDEX_HTML);
 }
 
-
-// BFS 
-void handleRoute() {
-  if (!server.hasArg("start") || !server.hasArg("goal")) {
-    server.send(400, "text/plain", "Missing start or goal");
-    return;
-  }
-
-  int start = server.arg("start").toInt();
-  int goal  = server.arg("goal").toInt();
-
-  latestRoute = graph.bfs(start, goal);
-
-  if (latestRoute.empty()) {
-    server.send(200, "text/plain", "NO ROUTE FOUND");
-    return;
-  }
-
-  // Create JSON list of indices
-  String s = "[";
-  for (int i = 0; i < latestRoute.size(); i++) {
-    s += String(latestRoute[i]);
-    if (i < latestRoute.size() - 1) s += ",";
-  }
-  s += "]";
-
-  server.send(200, "application/json", s);
-  Serial.println("BFS Route:");
-  Serial.println(s);
-}
-
-// ---- MANUAL CONTROL (from single_motor_test) ----
+// Manual control (PID car manipulation)
 void handleSetSpeed() {
   if (server.hasArg("speed") && server.hasArg("steering")) {
     baseSpeed     = server.arg("speed").toFloat();
     steeringValue = server.arg("steering").toFloat();
 
-    // Small values boosted a bit (like original project)
     if (fabs(steeringValue) <= 5) steeringValue *= 1.4f;
-    if (fabs(baseSpeed) <= 10)    baseSpeed     *= 1.4f;
+    if (fabs(baseSpeed)    <= 10) baseSpeed     *= 1.4f;
 
-    // Spin behavior (kept identical to your original logic)
     if (baseSpeed == 0.0f) {
-      Serial.print("spin");
-      targetSpeed      = -baseSpeed - steeringValue;
-      rightTargetSpeed =  baseSpeed - steeringValue;
+      Serial.println("Spin in place (manual)");
     }
 
     // Differential mapping: steering positive → turn right (left faster)
     targetSpeed      = -baseSpeed - steeringValue;
     rightTargetSpeed =  baseSpeed - steeringValue;
 
-    // Constrain to ±120 RPM
     targetSpeed      = constrain(targetSpeed,      -120, 120);
     rightTargetSpeed = constrain(rightTargetSpeed, -120, 120);
 
-    // Manual mode when using this API
     controlMode = MODE_MANUAL;
 
     server.send(200, "text/plain",
@@ -629,7 +662,7 @@ void handleSetSpeed() {
   }
 }
 
-// legacy alias if you still hit /control from some old UI
+// legacy alias if some old UI hits /control
 void handleControl() {
   if (server.hasArg("speed") && server.hasArg("steering")) {
     baseSpeed     = server.arg("speed").toFloat();
@@ -650,11 +683,11 @@ void handleControl() {
 
 void handleStop() {
   stopMotor();
+  controlMode = MODE_MANUAL;
   server.send(200, "text/plain", "Motor stopped");
   Serial.println("Motor stopped");
 }
 
-// PID update – dashboard version
 void handleSetPID() {
   if (server.hasArg("kp") && server.hasArg("ki") && server.hasArg("kd")) {
     leftPID.Kp = server.arg("kp").toFloat();
@@ -665,7 +698,7 @@ void handleSetPID() {
     rightPID.Ki = leftPID.Ki;
     rightPID.Kd = leftPID.Kd;
 
-    leftPID.integral = 0;
+    leftPID.integral  = 0;
     rightPID.integral = 0;
 
     server.send(200, "text/plain", "PID updated");
@@ -676,46 +709,51 @@ void handleSetPID() {
   }
 }
 
-// legacy alias (for older UI using /pid)
+// legacy alias
 void handlePID() {
   handleSetPID();
 }
 
-// Status – JSON for dashboard
+// Status JSON for dashboard (includes queue of node indices)
 void handleStatus() {
   String json = "{";
-  // Base control values
   json += "\"baseSpeed\":" + String(baseSpeed, 1) + ",";
   json += "\"steering\":"  + String(steeringValue, 1) + ",";
 
-  // Left wheel
   json += "\"leftTarget\":"   + String(targetSpeed, 1) + ",";
   json += "\"leftCurrent\":"  + String(currentSpeed, 1) + ",";
   json += "\"leftError\":"    + String(leftPID.error, 1) + ",";
   json += "\"leftPWM\":"      + String((int)leftPID.output) + ",";
   json += "\"leftEncoder\":"  + String(encoderCount) + ",";
 
-  // Right wheel
   json += "\"rightTarget\":"   + String(rightTargetSpeed, 1) + ",";
   json += "\"rightCurrent\":"  + String(rightCurrentSpeed, 1) + ",";
   json += "\"rightError\":"    + String(rightPID.error, 1) + ",";
   json += "\"rightPWM\":"      + String((int)rightPID.output) + ",";
   json += "\"rightEncoder\":"  + String(rightEncoderCount) + ",";
 
-  // Extra useful fields (not used by current JS, but harmless)
   json += "\"front\":"   + String(frontDistance) + ",";
   json += "\"right1\":"  + String(rightDistance1) + ",";
   json += "\"right2\":"  + String(rightDistance2) + ",";
   json += "\"yaw\":"     + String(currentAngle, 1) + ",";
   json += "\"mode\":"    + String((int)controlMode) + ",";
   json += "\"vx\":"      + String((int)robotX) + ",";
-  json += "\"vy\":"      + String((int)robotY);
+  json += "\"vy\":"      + String((int)robotY) + ",";
+
+  // paused + queue of node indices
+  json += "\"paused\":" + String(queuePaused ? 1 : 0) + ",";
+  json += "\"queue\":[";
+  for (size_t i = 0; i < nodeQueue.size(); ++i) {
+    json += String(nodeQueue[i]);
+    if (i + 1 < nodeQueue.size()) json += ",";
+  }
+  json += "]";
 
   json += "}";
   server.send(200, "application/json", json);
 }
 
-// ---- WALL / MODE / VIVE API (unchanged) ----
+// Wall / mode / Vive APIs (wall is effectively disabled but endpoints kept)
 void handleWallEnable() {
   if (server.hasArg("enable")) {
     bool enable = (server.arg("enable") == "1" || server.arg("enable") == "true");
@@ -748,50 +786,212 @@ void handleWallPD() {
   server.send(200, "text/plain", "Wall PD updated");
 }
 
+// Mode selection: "manual", "wall", "vive"
 void handleMode() {
   if (!server.hasArg("m")) {
     server.send(400, "text/plain", "Missing m");
     return;
   }
   String m = server.arg("m");
-  if (m == "manual") controlMode = MODE_MANUAL;
-  else if (m == "wall") { controlMode = MODE_WALL; wallFollowMode = true; }
-  else if (m == "vive") controlMode = MODE_VIVE;
+  if (m == "manual") {
+    controlMode = MODE_MANUAL;
+    wallFollowMode = false;
+  } else if (m == "wall") {
+    controlMode = MODE_WALL;
+    wallFollowMode = true;   // logic still commented out
+  } else if (m == "vive") {
+    controlMode = MODE_VIVE;
+  }
   server.send(200, "text/plain", "OK");
 }
 
+// Single point go-to (no queue), still available for debugging
+// /gotopoint?x=XXXX&y=YYYY[&dir=0/1]
 void handleGoToPoint() {
   if (server.hasArg("x") && server.hasArg("y")) {
     viveTargetX = server.arg("x").toInt();
     viveTargetY = server.arg("y").toInt();
-    viveNavigationMode = true;
+
+    if (server.hasArg("dir")) {
+      viveDirectionMode = server.arg("dir").toInt();
+    } else {
+      viveDirectionMode = 0; // default forward
+    }
+
     controlMode = MODE_VIVE;
-    server.send(200, "text/plain", "Moving");
+
+    String msg = "Moving ";
+    msg += (viveDirectionMode == 0 ? "(FORWARD)" : "(BACKWARD)");
+    server.send(200, "text/plain", msg);
   } else {
     server.send(400, "text/plain", "Missing x or y");
   }
 }
 
+// BFS route API: /route?goal=Y
+// - If queue not empty: start from last node in queue
+// - If queue empty: start from nearest node to current Vive pose
+// - Concatenate new route to the queue (without duplicating start node)
+// - Start following queue immediately in MODE_VIVE
+void handleQueueClear(){
+  nodeQueue.clear();        // Remove all planned nodes
+    paused = false;           // Optionally reset paused state
+
+    server.send(200, "text/plain", "Queue cleared");
+
+    Serial.println("[QUEUE] Cleared");
+
+    // If queue cleared while in VIVE mode, stop motors
+    if (controlMode == MODE_VIVE) {
+        baseSpeed = 0;
+        steering = 0;
+    }
+}
+void handleQueueSkip() {
+    if (!nodeQueue.empty()) {
+        int skipped = nodeQueue.front();
+        nodeQueue.pop_front();
+
+        String msg = "Skipped node ";
+        msg += skipped;
+        server.send(200, "text/plain", msg);
+
+        Serial.printf("[QUEUE] Skipped node %d\n", skipped);
+    }
+    else {
+        server.send(200, "text/plain", "Queue already empty");
+        Serial.println("[QUEUE] Skip requested but queue empty");
+        return;
+    }
+
+}
+
+void handleRoute() {
+  if (!server.hasArg("goal")) {
+    server.send(400, "text/plain", "Missing goal");
+    return;
+  }
+
+  int start = -1;
+  int goal = server.arg("goal").toInt();
+
+  // --- VALIDATE VIVE POSE (NEW: robotX > 0 and robotY > 0) ---
+  if ((robotX <= 0 || robotY <= 0) && nodeQueue.empty()) {
+    server.send(200, "text/plain", "Invalid pose: robotX/robotY <= 0. Cannot compute start node.");
+    return;
+  }
+
+  // If Vive is invalid and no queue exists → cannot route
+  if (!vivePoseValid() && nodeQueue.empty()) {
+    server.send(200, "text/plain", "Vive invalid (0,0). Cannot compute start node.");
+    return;
+  }
+
+  // =========================
+  // Determine START NODE
+  // =========================
+
+  // 1. If queue not empty, resume from last queued node
+  if (!nodeQueue.empty()) {
+    start = nodeQueue.back();
+  }
+  else {
+    // 2. If start parameter provided, use it
+    if (server.hasArg("start")) {
+      start = server.arg("start").toInt();
+    }
+    // 3. Otherwise infer from pose → but only if pose >0
+    else {
+      if (!vivePoseValid()) {
+        server.send(200, "text/plain", "Vive invalid. Provide explicit start.");
+        return;
+      }
+
+      if (robotX <= 0 || robotY <= 0) {
+        server.send(200, "text/plain", "Invalid pose: robotX/robotY <= 0");
+        return;
+      }
+
+      start = findNearestNode(robotX, robotY);
+    }
+  }
+
+  if (start < 0) {
+    server.send(200, "text/plain", "No valid start node");
+    return;
+  }
+
+  // =========================
+  // BFS ROUTE COMPUTATION
+  // =========================
+  std::vector<int> route = graph.bfs(start, goal);
+  if (route.empty()) {
+    server.send(200, "text/plain", "NO ROUTE FOUND");
+    return;
+  }
+
+  // =========================
+  // Append new route to queue
+  // =========================
+  size_t beginIndex = 0;
+  if (!nodeQueue.empty() && nodeQueue.back() == route[0]) {
+    beginIndex = 1;
+  }
+
+  for (size_t i = beginIndex; i < route.size(); ++i) {
+    nodeQueue.push_back(route[i]);
+  }
+
+  // =========================
+  // Start following the route
+  // =========================
+  controlMode = MODE_VIVE;
+  viveDirectionMode = 0;
+
+  // =========================
+  // Send back full queue as JSON
+  // =========================
+  String s = "[";
+  for (size_t i = 0; i < nodeQueue.size(); ++i) {
+    s += String(nodeQueue[i]);
+    if (i + 1 < nodeQueue.size()) s += ",";
+  }
+  s += "]";
+
+  server.send(200, "application/json", s);
+
+  Serial.println("QUEUE UPDATED:");
+  Serial.println(s);
+  Serial.printf("BFS from start=%d to goal=%d\n", start, goal);
+}
+
 // ==================== SETUP ====================
 void setup() {
   Serial.begin(115200);
-  delay(300);
+  Serial.println("MEAM5100 Unified Control - Startup");
 
-  // PWM
+  // PWM pins
   pinMode(MOTOR_RPWM, OUTPUT);
   pinMode(MOTOR_LPWM, OUTPUT);
   pinMode(RIGHT_MOTOR_RPWM, OUTPUT);
   pinMode(RIGHT_MOTOR_LPWM, OUTPUT);
+
   ledcAttach(MOTOR_RPWM,       PWM_FREQ, PWM_RESOLUTION);
   ledcAttach(MOTOR_LPWM,       PWM_FREQ, PWM_RESOLUTION);
   ledcAttach(RIGHT_MOTOR_RPWM, PWM_FREQ, PWM_RESOLUTION);
   ledcAttach(RIGHT_MOTOR_LPWM, PWM_FREQ, PWM_RESOLUTION);
+
+  ledcWrite(MOTOR_RPWM, 0);
+  ledcWrite(MOTOR_LPWM, 0);
+  ledcWrite(RIGHT_MOTOR_RPWM, 0);
+  ledcWrite(RIGHT_MOTOR_LPWM, 0);
 
   // Encoders
   pinMode(ENCODER_A,       INPUT_PULLUP);
   pinMode(ENCODER_B,       INPUT_PULLUP);
   pinMode(RIGHT_ENCODER_A, INPUT_PULLUP);
   pinMode(RIGHT_ENCODER_B, INPUT_PULLUP);
+
   attachInterrupt(digitalPinToInterrupt(ENCODER_A),       encoderISR,      RISING);
   attachInterrupt(digitalPinToInterrupt(RIGHT_ENCODER_A), rightEncoderISR, RISING);
 
@@ -816,129 +1016,121 @@ void setup() {
   // HTTP routes
   server.on("/",            handleRoot);
 
-  // manual control APIs expected by website.h
+  // Manual control APIs
   server.on("/setspeed",    handleSetSpeed);
   server.on("/stop",        handleStop);
   server.on("/setpid",      handleSetPID);
   server.on("/status",      handleStatus);
 
-  // legacy / alternate endpoints
+  // legacy
   server.on("/control",     handleControl);
   server.on("/pid",         handlePID);
 
-  // wall / vive APIs
+  // wall / vive / mode / BFS
   server.on("/wall/enable", handleWallEnable);
   server.on("/wall/goals",  handleWallGoals);
   server.on("/wall/pd",     handleWallPD);
   server.on("/mode",        handleMode);
   server.on("/gotopoint",   handleGoToPoint);
-
-  // BFS route API
-  server.on("/route", handleRoute);
+  server.on("/route",       handleRoute);
+  server.on("/queue/clear", handleQueueClear):
   server.begin();
 
-  // I2C + sensors
-  // Wire.begin(I2C_SDA, I2C_SCL);
-
-  // pinMode(TOF_XSHUT_FRONT, OUTPUT);
-  // pinMode(TOF_XSHUT_RIGHT, OUTPUT);
-  // pinMode(TOF_XSHUT_RIGHT2, OUTPUT);
-  // digitalWrite(TOF_XSHUT_FRONT, HIGH);
-  // digitalWrite(TOF_XSHUT_RIGHT, HIGH);
-  // digitalWrite(TOF_XSHUT_RIGHT2, HIGH);
-  // delay(10);
-
-  // if (!frontTOF.begin()) {
-  //   Serial.println("VL53L1X front init failed!");
-  // } else {
-  //   frontTOF.startRanging();
-  //   Serial.println("VL53L1X front init success!");
-  // }
-
-  // if (!rightTOF.begin())  Serial.println("VL53L0X right1 init failed!");
-  // if (!right2TOF.begin()) Serial.println("VL53L0X right2 init failed!");
-
-  // // MPU6050
-  // if (mpu.begin()) {
-  //   mpu.setAccelerometerRange(MPU6050_RANGE_4_G);
-  //   mpu.setGyroRange(MPU6050_RANGE_500_DEG);
-  //   mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
-  //   // Calibrate Z offset briefly (assume still)
-  //   sensors_event_t a, g, temp;
-  //   float sum = 0;
-  //   for (int i = 0; i < 50; i++) {
-  //     mpu.getEvent(&a, &g, &temp);
-  //     sum += g.gyro.z;
-  //     delay(10);
-  //   }
-  //   gyroZOffset = sum / 50.0f;
-  //   lastGyroTime = millis();
-  //   Serial.println("MPU6050 init success!");
-  // } else {
-  //   Serial.println("MPU6050 not found");
-  // }
-
   // Vive sensors
-  Serial.println("vive begin");
+  Serial.println("Vive begin");
   viveFront.begin();
   viveBack.begin();
 
   lastSpeedCalc     = millis();
   lastControlUpdate = millis();
+  lastPrint         = millis();
 
+  // ==================== GRAPH NODES (YOUR MAP) ====================
   // Vive coords
-  graph.addNode(5000,6520, {1,5});         // Node 0
-  graph.addNode(4500,6230, {0,2,8});       // Node 1
-  graph.addNode(3900, 6250, {1,3,7});       // Node 2
-  graph.addNode(3900,6300, {2,4});         // Node 3
-  graph.addNode(5330,6350, {3,11});         // Node 4
-  graph.addNode(5000, 5630, {0,6,7});         // Node 5
-  graph.addNode(5000,5250, {5,7,8,9});         // Node 6
-  graph.addNode(4320, 5100, {2,5,6,8,1});         // Node 7
-  graph.addNode(4640,4770, {6,7,5,1,2});         // Node 8
+  graph.addNode(5000,6320, {1,5});          // Node 0
+  graph.addNode(4500,6230, {0,2,8});        // Node 1
+  graph.addNode(3900,6250, {1,3,7});        // Node 2
+  graph.addNode(3900,6300, {2,4});          // Node 3
+  graph.addNode(3530,6350, {3,11});         // Node 4
+  graph.addNode(5000,5630, {0,6,7});        // Node 5
+  graph.addNode(5000,5250, {5,7,8,9});      // Node 6
+  graph.addNode(4320,5100, {2,5,6,8,1});    // Node 7
+  graph.addNode(4640,4770, {6,7,5,1,2});    // Node 8
   graph.addNode(5100,4150, {6,12});         // Node 9
-  graph.addNode(4000,4150, {7});         // Node 10
+  graph.addNode(4000,4150, {7});            // Node 10
   graph.addNode(3050,4200, {4,15});         // Node 11
 
   // coords 12~15 are suspicious. not accurate at the edge
   graph.addNode(5000,2100, {9,13});         // Node 12
-  graph.addNode(4400, 2100 {12,14});         // Node 13
-  graph.addNode(4000, 2000 {13,15});         // Node 14
-  graph.addNode(2000, 1900 {13,15});         // Node 15
-
-
-  Serial.println("Graph initialized with 15 nodes.");
+  graph.addNode(4400,2100, {12,14});        // Node 13
+  graph.addNode(4000,2000, {13,15});        // Node 14
+  graph.addNode(2000,1900, {13,15});        // Node 15
 }
-
 
 // ==================== LOOP ====================
 void loop() {
   server.handleClient();
 
-  // Sensors
+  // Sensors (gyro + ToF): currently disabled
   // updateGyroIntegration();
   // readTOFSensors();
+
+  // Vive pose
   readDualVive();
   computeVivePose();
 
   // Mode behaviors
   switch (controlMode) {
     case MODE_MANUAL:
-      // Targets already set by /setspeed or /control
+      // targetSpeed & rightTargetSpeed set by /setspeed
+      robotX = 0;
+      robotY = 0;
       break;
+
     case MODE_WALL:
-      if (wallFollowMode) wallFollowPD();
+      if (wallFollowMode) {
+        robotX = 0;
+        robotY = 0;
+        // wallFollowPD();  // commented out feature
+      }
       break;
+
     case MODE_VIVE:
-      viveGoToPoint();
+      if (!nodeQueue.empty()) {
+        followQueueStep();
+      } else {
+        // No queued route – if you used /gotopoint, you can still call step once:
+        // (optional) viveGoToPointStep();
+      }
       break;
   }
 
-  if (millis() - lastSpeedCalc >= SPEED_CALC_PERIOD)
+  if (millis() - lastSpeedCalc >= SPEED_CALC_PERIOD) {
     calculateSpeed();
+  }
 
   if (millis() - lastControlUpdate >= CONTROL_PERIOD) {
     updateMotorControl();
     lastControlUpdate = millis();
+  }
+
+  if (millis() - lastPrint >= Print_PERIOD) {
+    // Existing debug print
+    Serial.print("X, Y: ");
+    Serial.print(robotX);
+    Serial.print(", ");
+    Serial.println(robotY);
+    Serial.print("Heading: ");
+    Serial.println(robotHeading);
+
+    // NEW: PRINT QUEUE
+    Serial.print("QUEUE: [");
+    for (int i = 0; i < (int)nodeQueue.size(); i++) {
+      Serial.print(nodeQueue[i]);
+      if (i < (int)nodeQueue.size() - 1) Serial.print(",");
+    }
+    Serial.println("]");
+
+    lastPrint = millis();
   }
 }
