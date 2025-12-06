@@ -87,7 +87,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 <body>
   <div class="container">
     <h1>MEAM5100 Robot Control</h1>
-    <h3>Manual Drive · PID Tuning · Live Telemetry</h3>
+    <h3>Manual Drive · PID Tuning · Live Telemetry · BFS Routing</h3>
 
     <div id="gamepadStatus"
         style="text-align:center; padding:10px; margin-bottom:15px; 
@@ -123,6 +123,21 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       <div class="panel status">
         <h3>Live Status</h3>
         <pre id="statusBox">Loading...</pre>
+      </div>
+
+      <!-- =============== BFS ROUTE FINDER PANEL =============== -->
+      <div class="panel" style="background:#e8f4ff;">
+        <h3>BFS Route Finder</h3>
+
+        <label>Start Node:</label>
+        <input id="routeStart" type="number" value="0" style="width:80px;"><br><br>
+
+        <label>Goal Node:</label>
+        <input id="routeGoal" type="number" value="1" style="width:80px;"><br><br>
+
+        <button onclick="callRoute()">Find Route</button>
+
+        <pre id="routeResult" style="margin-top:10px; font-family:monospace;"></pre>
       </div>
 
     </div>
@@ -225,7 +240,6 @@ MODE  : ${data.mode}`;
       const gp = navigator.getGamepads()[gamepadIndex];
       if (!gp) return;
 
-      // RT = forward, LT = backward
       const rt = gp.buttons[7]?.value || 0;
       const lt = gp.buttons[6]?.value || 0;
       const speed = (rt - lt) * 120;
@@ -265,6 +279,23 @@ MODE  : ${data.mode}`;
         setControl(currentSpeed, currentSteering);
       }
     });
+
+    // ================== BFS ROUTE CALL ==================
+    function callRoute() {
+      const start = document.getElementById("routeStart").value;
+      const goal  = document.getElementById("routeGoal").value;
+
+      fetch(`/route?start=${start}&goal=${goal}`)
+        .then(r => r.text())
+        .then(txt => {
+          document.getElementById("routeResult").textContent =
+            "Route: " + txt;
+        })
+        .catch(err => {
+          document.getElementById("routeResult").textContent =
+            "Error fetching route.";
+        });
+    }
 
   </script>
 </body>

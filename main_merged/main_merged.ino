@@ -171,6 +171,76 @@ const unsigned long TOF_READ_PERIOD    = 50;   // ms
 
 // ==================== UTILS ====================
 
+class Node {
+public:
+    int x, y;
+    std::vector<int> neighbors;
+
+    Node() : x(0), y(0) {}
+    Node(int xCoord, int yCoord, std::vector<int> neigh)
+        : x(xCoord), y(yCoord), neighbors(neigh) {}
+};
+
+class Graph {
+public:
+    std::vector<Node> nodes;
+
+    Graph() {}
+
+    void addNode(int x, int y, std::vector<int> neigh) {
+        nodes.push_back(Node(x, y, neigh));
+    }
+
+    std::vector<int> bfs(int start, int goal) {
+        int N = nodes.size();
+        std::vector<bool> visited(N, false);
+        std::vector<int> parent(N, -1);
+        std::queue<int> q;
+
+        q.push(start);
+        visited[start] = true;
+
+        while (!q.empty()) {
+            int cur = q.front(); q.pop();
+
+            if (cur == goal)
+                return reconstructPath(parent, start, goal);
+
+            for (int nb : nodes[cur].neighbors) {
+                if (!visited[nb]) {
+                    visited[nb] = true;
+                    parent[nb] = cur;
+                    q.push(nb);
+                }
+            }
+        }
+
+        return std::vector<int>(); // empty = no route
+    }
+
+private:
+    std::vector<int> reconstructPath(std::vector<int>& parent, int start, int goal) {
+        std::vector<int> path;
+        int cur = goal;
+
+        while (cur != -1) {
+            path.push_back(cur);
+            if (cur == start) break;
+            cur = parent[cur];
+        }
+
+        std::reverse(path.begin(), path.end());
+        return path;
+    }
+};
+
+// Create global graph
+Graph graph;
+
+// Store latest BFS route so robot can follow it
+std::vector<int> latestRoute;
+
+
 // (kept for reference; no longer used by Vive)
 uint32_t med3(uint32_t a, uint32_t b, uint32_t c) {
   if ((a <= b) && (a <= c)) return (b <= c) ? b : c;
@@ -490,6 +560,37 @@ void handleRoot() {
   server.send_P(200, "text/html", INDEX_HTML);
 }
 
+
+// BFS 
+void handleRoute() {
+  if (!server.hasArg("start") || !server.hasArg("goal")) {
+    server.send(400, "text/plain", "Missing start or goal");
+    return;
+  }
+
+  int start = server.arg("start").toInt();
+  int goal  = server.arg("goal").toInt();
+
+  latestRoute = graph.bfs(start, goal);
+
+  if (latestRoute.empty()) {
+    server.send(200, "text/plain", "NO ROUTE FOUND");
+    return;
+  }
+
+  // Create JSON list of indices
+  String s = "[";
+  for (int i = 0; i < latestRoute.size(); i++) {
+    s += String(latestRoute[i]);
+    if (i < latestRoute.size() - 1) s += ",";
+  }
+  s += "]";
+
+  server.send(200, "application/json", s);
+  Serial.println("BFS Route:");
+  Serial.println(s);
+}
+
 // ---- MANUAL CONTROL (from single_motor_test) ----
 void handleSetSpeed() {
   if (server.hasArg("speed") && server.hasArg("steering")) {
@@ -732,6 +833,8 @@ void setup() {
   server.on("/mode",        handleMode);
   server.on("/gotopoint",   handleGoToPoint);
 
+  // BFS route API
+  server.on("/route", handleRoute);
   server.begin();
 
   // I2C + sensors
@@ -782,7 +885,31 @@ void setup() {
 
   lastSpeedCalc     = millis();
   lastControlUpdate = millis();
+
+  // Vive coords
+  graph.addNode(5000,6520, {1,5});         // Node 0
+  graph.addNode(4500,6230, {0,2,8});       // Node 1
+  graph.addNode(3900, 6250, {1,3,7});       // Node 2
+  graph.addNode(3900,6300, {2,4});         // Node 3
+  graph.addNode(5330,6350, {3,11});         // Node 4
+  graph.addNode(5000, 5630, {0,6,7});         // Node 5
+  graph.addNode(5000,5250, {5,7,8,9});         // Node 6
+  graph.addNode(4320, 5100, {2,5,6,8,1});         // Node 7
+  graph.addNode(4640,4770, {6,7,5,1,2});         // Node 8
+  graph.addNode(5100,4150, {6,12});         // Node 9
+  graph.addNode(4000,4150, {7});         // Node 10
+  graph.addNode(3050,4200, {4,15});         // Node 11
+
+  // coords 12~15 are suspicious. not accurate at the edge
+  graph.addNode(5000,2100, {9,13});         // Node 12
+  graph.addNode(4400, 2100 {12,14});         // Node 13
+  graph.addNode(4000, 2000 {13,15});         // Node 14
+  graph.addNode(2000, 1900 {13,15});         // Node 15
+
+
+  Serial.println("Graph initialized with 15 nodes.");
 }
+
 
 // ==================== LOOP ====================
 void loop() {
