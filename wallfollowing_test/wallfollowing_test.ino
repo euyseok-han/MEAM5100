@@ -328,12 +328,14 @@ float readGyroZdeg() {
 void updateGyroIntegration() {
   unsigned long now = millis();
   float dt = (now - lastGyroTime) / 1000.0f;
-  if (dt <= IMU_READ_PERIOD) return;
+  if (dt * 1000 <= IMU_READ_PERIOD) return;
   lastGyroTime = now;
 
   currentAngle += readGyroZdeg() * dt;
   while (currentAngle > 180) currentAngle -= 360;
   while (currentAngle < -180) currentAngle += 360;
+  Serial.print("  Angle: ");
+  Serial.println(currentAngle);
 }
 
 void resetYaw() {
@@ -394,7 +396,7 @@ void readTOFSensors() {
   VL53L0X_RangingMeasurementData_t measureFront;
   frontTOF.rangingTest(&measureFront, false);
   if (measureFront.RangeStatus != 4) {  // phase failures have incorrect data
-    Serial.print("Front Distance (mm): "); Serial.println(measureFront.RangeMilliMeter);
+    Serial.print("Front: "); Serial.print(measureFront.RangeMilliMeter);
     frontDistance = measureFront.RangeMilliMeter;
   } else {
     Serial.println(" out of range ");
@@ -405,7 +407,7 @@ void readTOFSensors() {
   VL53L0X_RangingMeasurementData_t measureRight1;
   rightTOF.rangingTest(&measureRight1, false);
   if (measureRight1.RangeStatus != 4) {  // phase failures have incorrect data
-    Serial.print("Side Front Distance (mm): "); Serial.println(measureRight1.RangeMilliMeter);
+    Serial.print("  Side Front: "); Serial.print(measureRight1.RangeMilliMeter);
     rightDistance1 = measureRight1.RangeMilliMeter;
   } else {
     Serial.println(" out of range ");
@@ -416,7 +418,7 @@ void readTOFSensors() {
   VL53L0X_RangingMeasurementData_t measureRight2;
   right2TOF.rangingTest(&measureRight2, false);
   if (measureRight2.RangeStatus != 4) {  // phase failures have incorrect data
-    Serial.print("Side Back Distance (mm): "); Serial.println(measureRight2.RangeMilliMeter);
+    Serial.print("  Side Back: "); Serial.print(measureRight2.RangeMilliMeter);
     rightDistance2 = measureRight2.RangeMilliMeter;
   } else {
     Serial.println(" out of range ");
@@ -856,27 +858,27 @@ void loop() {
   // Always update gyro for all modes (needed for mode switching)
   updateGyroIntegration();
 
-  // // Mode behaviors
-  // switch (controlMode) {
-  //   case MODE_MANUAL:
-  //     // Targets already set by /control
-  //     break;
-  //   case MODE_WALL:
-  //     if (wallFollowMode) {
-  //       // State machine also calls updateGyroIntegration(), but it's idempotent
-  //       updateStateMachine();
-  //     }
-  //     break;
+  // Mode behaviors
+  switch (controlMode) {
+    case MODE_MANUAL:
+      // Targets already set by /control
+      break;
+    case MODE_WALL:
+      if (wallFollowMode) {
+        // State machine also calls updateGyroIntegration(), but it's idempotent
+        updateStateMachine();
+      }
+      break;
   //   case MODE_VIVE:
   //     viveGoToPoint();
   //     break;
-  // }
+  }
 
-  // if (millis() - lastSpeedCalc >= SPEED_CALC_PERIOD) calculateSpeed();
+  if (millis() - lastSpeedCalc >= SPEED_CALC_PERIOD) calculateSpeed();
 
-  // if (millis() - lastControlUpdate >= CONTROL_PERIOD) {
-  //   updateMotorControl();
-  //   lastControlUpdate = millis();
-  // }
+  if (millis() - lastControlUpdate >= CONTROL_PERIOD) {
+    updateMotorControl();
+    lastControlUpdate = millis();
+  }
 }
 
