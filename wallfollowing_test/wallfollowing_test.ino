@@ -31,16 +31,16 @@
 #define RIGHT_MOTOR          1   // Motor identifier
 
 // Left Motor & Encoder
-#define ENCODER_A           15   // GPIO 1
-#define ENCODER_B           16   // GPIO 2
-#define MOTOR_RPWM          18   // GPIO 18 - Forward
-#define MOTOR_LPWM          17   // GPIO 17 - Reverse
+#define ENCODER_A            1   // GPIO 1
+#define ENCODER_B            2   // GPIO 2
+#define MOTOR_RPWM          18   // GPIO 41 - Forward
+#define MOTOR_LPWM          17   // GPIO 42 - Reverse
 
 // Right Motor & Encoder
-#define RIGHT_ENCODER_A      1   // GPIO 1
-#define RIGHT_ENCODER_B      2   // GPIO 2
-#define RIGHT_MOTOR_RPWM    41   // GPIO 41 - Forward
-#define RIGHT_MOTOR_LPWM    42   // GPIO 42 - Reverse
+#define RIGHT_ENCODER_A     15   // GPIO 1
+#define RIGHT_ENCODER_B     16   // GPIO 2
+#define RIGHT_MOTOR_RPWM    41   // GPIO 18 - Forward
+#define RIGHT_MOTOR_LPWM    42   // GPIO 17 - Reverse
 
 // I2C Pins
 #define I2C_SDA             47   // GPIO 47 (SDA)
@@ -212,42 +212,46 @@ static inline int pwmFromRPM(float rpm) {
 }
 
 void setMotorPWM(int pwmValue, int motorSide) {
-  pwmValue = constrain(pwmValue, -255, 255);
+  int scaled = pwmFromRPM(pwmValue);
 
   if (motorSide == RIGHT_MOTOR) {
     // Invert for right motor wiring
-    pwmValue = -pwmValue;
-    if (pwmValue >= 0) {
-      ledcWrite(RIGHT_MOTOR_RPWM, pwmValue);
+    scaled = -scaled;
+
+    if (scaled > 0) {
+      ledcWrite(RIGHT_MOTOR_RPWM, scaled);
       ledcWrite(RIGHT_MOTOR_LPWM, 0);
+    } else if (scaled < 0) {
+      ledcWrite(RIGHT_MOTOR_RPWM, 0);
+      ledcWrite(RIGHT_MOTOR_LPWM, -scaled);
     } else {
       ledcWrite(RIGHT_MOTOR_RPWM, 0);
-      ledcWrite(RIGHT_MOTOR_LPWM, -pwmValue);
+      ledcWrite(RIGHT_MOTOR_LPWM, 0);
     }
-    lastRightPWM = abs(pwmValue);
     return;
   }
 
   // Left motor
-  if (pwmValue >= 0) {
-    ledcWrite(MOTOR_RPWM, pwmValue);
+  if (scaled > 0) {
+    ledcWrite(MOTOR_RPWM, scaled);
     ledcWrite(MOTOR_LPWM, 0);
+  } else if (scaled < 0) {
+    ledcWrite(MOTOR_RPWM, 0);
+    ledcWrite(MOTOR_LPWM, -scaled);
   } else {
     ledcWrite(MOTOR_RPWM, 0);
-    ledcWrite(MOTOR_LPWM, -pwmValue);
+    ledcWrite(MOTOR_LPWM, 0);
   }
-  lastLeftPWM = abs(pwmValue);
 }
 
 void stopMotor() {
   targetSpeed = 0;
   rightTargetSpeed = 0;
+  baseSpeed = 0;
+  steeringValue = 0;
+
   leftPID.integral = 0; leftPID.lastError = 0;
   rightPID.integral = 0; rightPID.lastError = 0;
-
-  // Immediately stop motors (don't wait for PID update)
-  setMotorPWM(0, LEFT_MOTOR);
-  setMotorPWM(0, RIGHT_MOTOR);
 }
 
 // ==================== PID ====================
@@ -269,8 +273,8 @@ void updateMotorControl() {
   float leftOut = calculatePID(leftPID, targetSpeed, currentSpeed, dt);
   float rightOut = calculatePID(rightPID, rightTargetSpeed, rightCurrentSpeed, dt);
 
-  setMotorPWM(pwmFromRPM(leftOut), LEFT_MOTOR);
-  setMotorPWM(pwmFromRPM(rightOut), RIGHT_MOTOR);
+  setMotorPWM(leftOut, LEFT_MOTOR);
+  setMotorPWM(rightOut, RIGHT_MOTOR);
 }
 
 // ==================== SPEED CALC ====================
@@ -623,18 +627,51 @@ void handleRoot() {
   server.send_P(200, "text/html", INDEX_HTML);
 }
 
-void handleControl() {
+// Manual control (PID car manipulation)
+void handleSetSpeed() {
   if (server.hasArg("speed") && server.hasArg("steering")) {
-    baseSpeed = server.arg("speed").toFloat();
+    baseSpeed     = server.arg("speed").toFloat();
     steeringValue = server.arg("steering").toFloat();
 
-    // Steering positive: turn right -> left wheel faster
-    targetSpeed = baseSpeed - steeringValue;
-    rightTargetSpeed = baseSpeed + steeringValue;
+    if (fabs(steeringValue) <= 5) steeringValue *= 1.4f;
+    if (fabs(baseSpeed)    <= 10) baseSpeed     *= 1.4f;
 
-    targetSpeed = constrain(targetSpeed, -120.0f, 120.0f);
-    rightTargetSpeed = constrain(rightTargetSpeed, -120.0f, 120.0f);
+    if (baseSpeed == 0.0f) {
+      Serial.println("Spin in place (manual)");
+    }
 
+    // Differential mapping: steering positive → turn right (left faster)
+    targetSpeed      =  baseSpeed + steeringValue;
+    rightTargetSpeed =  baseSpeed - steeringValue;
+
+    targetSpeed      = constrain(targetSpeed,      -120, 120);
+    rightTargetSpeed = constrain(rightTargetSpeed, -120, 120);
+
+    controlMode = MODE_MANUAL;
+
+    server.send(200, "text/plain",
+      "Control set: Speed=" + String(baseSpeed) +
+      " Steering=" + String(steeringValue));
+    Serial.printf("Control - Base: %.1f, Steering: %.1f -> Left: %.1f, Right: %.1f\n",
+                  baseSpeed, steeringValue, targetSpeed, rightTargetSpeed);
+  } else {
+    server.send(400, "text/plain", "Missing speed or steering parameter");
+  }
+}
+
+// legacy alias if some old UI hits /control
+void handleControl() {
+  if (server.hasArg("speed") && server.hasArg("steering")) {
+    baseSpeed     = server.arg("speed").toFloat();
+    steeringValue = server.arg("steering").toFloat();
+
+    targetSpeed      = -baseSpeed - steeringValue;
+    rightTargetSpeed =  baseSpeed - steeringValue;
+
+    targetSpeed      = constrain(targetSpeed,      -120, 120);
+    rightTargetSpeed = constrain(rightTargetSpeed, -120, 120);
+
+    controlMode = MODE_MANUAL;
     server.send(200, "text/plain", "OK");
   } else {
     server.send(400, "text/plain", "Missing speed or steering");
@@ -643,40 +680,72 @@ void handleControl() {
 
 void handleStop() {
   stopMotor();
-  server.send(200, "text/plain", "Stopped");
+  controlMode = MODE_MANUAL;
+  server.send(200, "text/plain", "Motor stopped");
+  Serial.println("Motor stopped");
 }
 
-void handlePID() {
+void handleSetPID() {
   if (server.hasArg("kp") && server.hasArg("ki") && server.hasArg("kd")) {
     leftPID.Kp = server.arg("kp").toFloat();
     leftPID.Ki = server.arg("ki").toFloat();
     leftPID.Kd = server.arg("kd").toFloat();
-    rightPID = leftPID; // copy
-    leftPID.integral = rightPID.integral = 0;
-    leftPID.lastError = rightPID.lastError = 0;
+
+    rightPID.Kp = leftPID.Kp;
+    rightPID.Ki = leftPID.Ki;
+    rightPID.Kd = leftPID.Kd;
+
+    leftPID.integral  = 0;
+    rightPID.integral = 0;
+
     server.send(200, "text/plain", "PID updated");
+    Serial.printf("PID updated: Kp=%.2f Ki=%.2f Kd=%.3f\n",
+                  leftPID.Kp, leftPID.Ki, leftPID.Kd);
   } else {
-    server.send(400, "text/plain", "Missing kp/ki/kd");
+    server.send(400, "text/plain", "Missing PID parameters");
   }
+}
+
+// legacy alias
+void handlePID() {
+  handleSetPID();
 }
 
 void handleStatus() {
   String json = "{";
-  json += "\"leftTarget\":" + String(targetSpeed, 1) + ",";
-  json += "\"leftCurrent\":" + String(currentSpeed, 1) + ",";
-  json += "\"rightTarget\":" + String(rightTargetSpeed, 1) + ",";
-  json += "\"rightCurrent\":" + String(rightCurrentSpeed, 1) + ",";
-  json += "\"leftPWM\":" + String(lastLeftPWM) + ",";
-  json += "\"rightPWM\":" + String(lastRightPWM) + ",";
-  json += "\"front\":" + String(frontDistance) + ",";
-  json += "\"right1\":" + String(rightDistance1) + ",";
-  json += "\"right2\":" + String(rightDistance2) + ",";
-  json += "\"yaw\":" + String(currentAngle, 1) + ",";
-  json += "\"state\":" + String((controlMode==MODE_WALL && wallFollowMode)?1:0) + ",";
-  json += "\"mode\":" + String((int)controlMode) + ",";
-  json += "\"vx\":" + String((int)robotX) + ",";
-  json += "\"vy\":" + String((int)robotY);
-  json += "}";
+  json += "\"baseSpeed\":" + String(baseSpeed, 1) + ",";
+  json += "\"steering\":"  + String(steeringValue, 1) + ",";
+
+  json += "\"leftTarget\":"   + String(targetSpeed, 1) + ",";
+  json += "\"leftCurrent\":"  + String(currentSpeed, 1) + ",";
+  json += "\"leftError\":"    + String(leftPID.error, 1) + ",";
+  json += "\"leftPWM\":"      + String((int)leftPID.output) + ",";
+  json += "\"leftEncoder\":"  + String(encoderCount) + ",";
+
+  json += "\"rightTarget\":"   + String(rightTargetSpeed, 1) + ",";
+  json += "\"rightCurrent\":"  + String(rightCurrentSpeed, 1) + ",";
+  json += "\"rightError\":"    + String(rightPID.error, 1) + ",";
+  json += "\"rightPWM\":"      + String((int)rightPID.output) + ",";
+  json += "\"rightEncoder\":"  + String(rightEncoderCount) + ",";
+
+  json += "\"front\":"   + String(frontDistance) + ",";
+  json += "\"right1\":"  + String(rightDistance1) + ",";
+  json += "\"right2\":"  + String(rightDistance2) + ",";
+  json += "\"yaw\":"     + String(currentAngle, 1) + ",";
+  json += "\"mode\":"    + String((int)controlMode) + ",";
+  json += "\"vx\":"      + String((int)robotX) + ",";
+  json += "\"vy\":"      + String((int)robotY) + ",";
+
+  // // paused + queue of node indices
+  // json += "\"paused\":" + String(queuePaused ? 1 : 0) + ",";
+  // json += "\"queue\":[";
+  // for (size_t i = 0; i < nodeQueue.size(); ++i) {
+  //   json += String(nodeQueue[i]);
+  //   if (i + 1 < nodeQueue.size()) json += ",";
+  // }
+  // json += "]";
+
+  // json += "}";
   server.send(200, "application/json", json);
 }
 
@@ -684,14 +753,16 @@ void handleWallEnable() {
   if (server.hasArg("enable")) {
     bool enable = (server.arg("enable") == "1" || server.arg("enable") == "true");
     wallFollowMode = enable;
-    controlMode = enable ? MODE_WALL : MODE_MANUAL;
+    controlMode    = enable ? MODE_WALL : MODE_MANUAL;
     if (enable) {
       lastDistError = 0;
       lastWallFollowUpdate = 0;  // Reset wall follow timer
       resetYaw();
       currentState = STATE_WALL_FOLLOW;
+    } else {
+      stopMotor();
+      currentState = STATE_IDLE;
     }
-    else { stopMotor(); currentState = STATE_IDLE; }
     server.send(200, "text/plain", enable ? "WALL ON" : "WALL OFF");
   } else {
     server.send(400, "text/plain", "Missing enable");
