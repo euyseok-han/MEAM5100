@@ -8,7 +8,7 @@
  *
  * Notes on pins (ESP32-S3 defaults used in this project):
  *  - I2C remains on SDA=11, SCL=12
- *  - Vive pins: 5 (front) and 4 (back)
+ *  - Vive pins: 5 (left) and 4 (right)
  *  - RIGHT_ENCODER_B kept at 16
  */
 
@@ -35,16 +35,16 @@
 #define RIGHT_MOTOR        1   // Right motor identifier
 
 // Motor 1 (Left Wheel)
-#define ENCODER_A          1   // Left encoder channel A
-#define ENCODER_B          2   // Left encoder channel B
-#define MOTOR_RPWM         18  // Left motor RPWM = Forward direction
-#define MOTOR_LPWM         17  // Left motor LPWM = Reverse direction
+#define RIGHT_ENCODER_A          1   // Left encoder channel A
+#define RIGHT_ENCODER_B          2   // Left encoder channel B
+#define RIGHT_MOTOR_RPWM         18  // Left motor RPWM = Forward direction
+#define RIGHT_MOTOR_LPWM         17  // Left motor LPWM = Reverse direction
 
 // Motor 2 (Right Wheel)
-#define RIGHT_ENCODER_A    15  // Right encoder channel A
-#define RIGHT_ENCODER_B    16  // Right encoder channel B
-#define RIGHT_MOTOR_RPWM   41  // Right motor RPWM = Forward direction
-#define RIGHT_MOTOR_LPWM   42  // Right motor LPWM = Reverse direction
+#define ENCODER_A    15  // Right encoder channel A
+#define ENCODER_B    16  // Right encoder channel B
+#define MOTOR_RPWM   41  // Right motor RPWM = Forward direction
+#define MOTOR_LPWM   42  // Right motor LPWM = Reverse direction
 
 // I2C Sensors (TOF + MPU6050)
 #define I2C_SDA            11
@@ -56,8 +56,9 @@
 #define TOF_XSHUT_RIGHT2    21  // VL53L0X (back-right)
 
 // Vive tracker pins
-#define VIVE_FRONT_PIN     5
-#define VIVE_BACK_PIN      4
+// Now used as LEFT and RIGHT Vive trackers (Option B)
+#define VIVE_LEFT_PIN     4    // left Vive
+#define VIVE_RIGHT_PIN      5    // right Vive
 
 // ==================== WIFI ====================
 const char* ssid = "TP-Link_8A8C";
@@ -68,7 +69,7 @@ WebServer server(80);
 // ==================== CONTROL CONSTANTS ====================
 const int PWM_FREQ = 5000;
 const int PWM_RESOLUTION = 8;        // 8-bit resolution (0-255)
-const float GOAL_REACHED_THRESHOLD = 200.0f;  // mm radius to consider waypoint reached
+const float GOAL_REACHED_THRESHOLD = 400.0f;  // mm radius to consider waypoint reached
 
 // ==================== MOTOR & ENCODER VARIABLES ====================
 volatile long encoderCount = 0;
@@ -147,34 +148,37 @@ enum ControlMode {
 
 ControlMode controlMode = MODE_MANUAL;
 
-// ==================== VIVE (dual sensors) ====================
-Vive510 viveFront(VIVE_FRONT_PIN);
-Vive510 viveBack(VIVE_BACK_PIN);
+// ==================== VIVE (dual sensors, used as LEFT + RIGHT) ====================
+Vive510 viveLeft(VIVE_LEFT_PIN);   // right Vive tracker
+Vive510 viveRight(VIVE_RIGHT_PIN);     // left Vive tracker
 
-uint16_t fx, fy, bx, by;
-uint16_t fx0, fy0, fx1, fy1, fx2, fy2;
-uint16_t bx0, by0, bx1, by1, bx2, by2;
+uint16_t lx, ly, rx, ry;
+uint16_t lx0, ly0, lx1, ly1, lx2, ly2;
+uint16_t rx0, ry0, rx1, ry1, rx2, ry2;
 
-bool frontValid = false;
-bool backValid  = false;
+bool leftValid = false;
+bool rightValid  = false;
 
 float robotX = 0, robotY = 0;
 float robotHeading = 0;         // radians
 
 int viveTargetX = 0;
 int viveTargetY = 0;
-int viveDirectionMode = 0;      // 0 = forward, 1 = backward
+int viveDirectionMode = 0;      // kept but not used in new logic
 
 // ==================== TIMING ====================
 unsigned long lastControlUpdate = 0;
 unsigned long lastSpeedCalc = 0;
 unsigned long lastTOFRead = 0;
 unsigned long lastPrint = 0;
+unsigned long lastVive = 0;
+
 
 const unsigned long CONTROL_PERIOD     = 50;   // ms
 const unsigned long SPEED_CALC_PERIOD  = 100;  // ms
 const unsigned long TOF_READ_PERIOD    = 50;   // ms
 const uint16_t      Print_PERIOD       = 500;  // ms
+const uint16_t      Vive_PERIOD = 150; // ms
 
 // ==================== GRAPH + BFS ROUTE FINDING ====================
 class Node {
@@ -250,6 +254,12 @@ std::vector<int> nodeQueue;   // front = nodeQueue[0]
 bool queuePaused = false;     // pause following without clearing queue
 
 // ==================== UTILS ====================
+float normalizeAngle(float a) {
+    while (a >  M_PI)  a -= 2*M_PI;
+    while (a < -M_PI)  a += 2*M_PI;
+    return a;
+}
+
 uint16_t filterVive(uint16_t raw, uint16_t last1, uint16_t last2, uint16_t lastGood) {
 
     // voting window of previous good values
@@ -257,7 +267,7 @@ uint16_t filterVive(uint16_t raw, uint16_t last1, uint16_t last2, uint16_t lastG
     // lastGood = global stable value
     if (robotX == 0 || robotY == 0) return raw;
     // If any value is clearly invalid (0 or tiny), reject immediately
-    if (raw < 1000 || raw > 9000)
+    if (raw < 100 || raw > 9000)
         return lastGood;
     
     // Compute expected next value (smooth motion)
@@ -383,8 +393,9 @@ void updateMotorControl() {
   float leftOut  = calculatePID(leftPID,  targetSpeed,      currentSpeed,      dt);
   float rightOut = calculatePID(rightPID, rightTargetSpeed, rightCurrentSpeed, dt);
 
-  setMotorPWM(leftOut,  LEFT_MOTOR);
-  setMotorPWM(rightOut, RIGHT_MOTOR);
+  // NOTE: You had this form (current + PID); kept as-is.
+  setMotorPWM(currentSpeed + leftOut,       LEFT_MOTOR);
+  setMotorPWM(rightCurrentSpeed + rightOut, RIGHT_MOTOR);
 }
 
 // ==================== SPEED CALCULATION ====================
@@ -399,8 +410,8 @@ void calculateSpeed() {
     float revLeft  = dl / 1400.0f;  // 1400 counts per rev
     float revRight = dr / 1400.0f;
 
-    currentSpeed      = revLeft  / dt * 1000.0f * 60.0f; // RPM
-    rightCurrentSpeed = revRight / dt * 1000.0f * 60.0f;
+    currentSpeed      = - revLeft  / dt * 1000.0f * 60.0f; // RPM
+    rightCurrentSpeed =   revRight / dt * 1000.0f * 60.0f;
 
     lastEncoderCount      = encoderCount;
     rightLastEncoderCount = rightEncoderCount;
@@ -463,65 +474,70 @@ void wallFollowPD() {
 
 // ==================== VIVE READ + NAV ====================
 void readDualVive() {
-  frontValid = false;
-  backValid  = false;
+  leftValid = false;
+  rightValid  = false;
 
-  // FRONT VIVE
-  if (viveFront.status() != VIVE_RECEIVING) {
-    viveFront.sync(5);
+  // LEFT (was FRONT) VIVE
+  if (viveLeft.status() != VIVE_RECEIVING) {
+    viveLeft.sync(5);
   } else {
     // shift history of filtered values
-    fx2 = fx1; fy2 = fy1;
-    fx1 = fx0; fy1 = fy0;
+    lx2 = lx1; ly2 = ly1;
+    lx1 = lx0; ly1 = ly0;
 
     // new raw samples
-    fx0 = viveFront.xCoord();
-    fy0 = viveFront.yCoord();
+    lx0 = viveLeft.xCoord();
+    ly0 = viveLeft.yCoord();
 
-    // continuity-based filter using lastGood = fx/fy
-    uint16_t fxf = filterVive(fx0, fx1, fx2, fx);
-    uint16_t fyf = filterVive(fy0, fy1, fy2, fy);
+    // continuity-based filter using lastGood = lx/ly
+    uint16_t lxf = filterVive(lx0, lx1, lx2, lx);
+    uint16_t lyf = filterVive(ly0, ly1, ly2, ly);
 
-    if (fxf > 0 && fyf > 0) {
-      fx = fxf;
-      fy = fyf;
-      frontValid = true;
+    if (lxf > 0 && lyf > 0) {
+      lx = lxf;
+      ly = lyf;
+      leftValid = true;
     }
   }
 
-  // BACK VIVE
-  if (viveBack.status() != VIVE_RECEIVING) {
-    viveBack.sync(5);
+  // RIGHT (was BACK) VIVE
+  if (viveRight.status() != VIVE_RECEIVING) {
+    viveRight.sync(5);
   } else {
-    bx2 = bx1; by2 = by1;
-    bx1 = bx0; by1 = by0;
+    rx2 = rx1; ry2 = ry1;
+    rx1 = rx0; ry1 = ry0;
 
-    bx0 = viveBack.xCoord();
-    by0 = viveBack.yCoord();
+    rx0 = viveRight.xCoord();
+    ry0 = viveRight.yCoord();
 
-    uint16_t bxf = filterVive(bx0, bx1, bx2, bx);
-    uint16_t byf = filterVive(by0, by1, by2, by);
+    uint16_t rxf = filterVive(rx0, rx1, rx2, rx);
+    uint16_t ryf = filterVive(ry0, ry1, ry2, ry);
 
-    if (bxf > 0 && byf > 0) {
-      bx = bxf;
-      by = byf;
-      backValid = true;
+    if (rxf > 0 && ryf > 0) {
+      rx = rxf;
+      ry = ryf;
+      rightValid = true;
     }
   }
 }
 
+// Pose + heading from left/right Vive pair (Option B)
 void computeVivePose() {
-  if (frontValid && backValid) {
-    robotX = (fx + bx) / 2.0f;
-    robotY = (fy + by) / 2.0f;
+  if (leftValid && rightValid) {
+    // Midpoint of the two trackers
+    robotX = (lx + rx) / 2.0f;
+    robotY = (ly + ry) / 2.0f;
 
-    robotHeading = atan2f((float)fy - (float)by, (float)fx - (float)bx);
-  } else if (frontValid && !backValid) {
-    robotX = fx;
-    robotY = fy;
-  } else if (!frontValid && backValid) {
-    robotX = bx;
-    robotY = by;
+    // Heading from RIGHT -> LEFT tracker
+    // (sign depends on how you mounted them; this is consistent with lx=left, rx=right)
+    robotHeading = atan2f(ly - ry, lx - rx) - 3.14159265f/2;
+    normalizeAngle(robotHeading);
+  } else if (leftValid && !rightValid) {
+    robotX = lx;
+    robotY = ly;
+  } else if (!leftValid && rightValid) {
+    robotX = rx;
+    robotY = ry;
   } else {
     // Explicitly mark pose invalid
     robotX = 0;
@@ -533,9 +549,12 @@ bool vivePoseValid() {
   return !(robotX == 0 && robotY == 0);
 }
 
-// Low-level Vive go-to-point step: returns true if goal reached
+// ==================== NEW VIVE GO-TO-POINT LOGIC ====================
+//  - Choose forward/backward direction based on which heading is closer
+//  - If |angle error| > 5° → turn in place
+//  - If |angle error| ≤ 5° → drive toward target with steering correction
 bool viveGoToPointStep() {
-  if (!frontValid && !backValid) {
+  if (!leftValid || !rightValid) {
     stopMotor();
     return false;
   }
@@ -548,41 +567,74 @@ bool viveGoToPointStep() {
 
   float dx = (float)viveTargetX - robotX;
   float dy = (float)viveTargetY - robotY;
+
   float dist = sqrtf(dx * dx + dy * dy);
 
-  // Reached current goal
+  // ---------------------------
+  // GOAL REACHED
+  // ---------------------------
   if (dist < GOAL_REACHED_THRESHOLD) {
     stopMotor();
     return true;
   }
 
-  float desired = atan2f(dy, dx);
+  // ---------------------------
+  // FORWARD & BACKWARD HEADINGS
+  // ---------------------------
+  float desiredForward  = atan2f(dy, dx);
+  float desiredBackward = desiredForward + 3.14159265f;  // 180 deg
+  if (desiredBackward > 3.14159265f)
+      desiredBackward -= 6.2831853f;
 
-  // Backward approach: flip target heading 180 degrees
-  if (viveDirectionMode == 1) {
-    desired += 3.14159265f;
-    if (desired > 3.14159265f) desired -= 6.2831853f;
+  float errF = normalizeAngle(desiredForward  - robotHeading);
+  float errB = normalizeAngle(desiredBackward - robotHeading);
+
+  // Choose the direction with smaller heading error
+  bool backward = (fabs(errB) < fabs(errF));
+  float err     = backward ? errB : errF;
+
+  // ---------------------------
+  // TURN-IN-PLACE vs DRIVE+STEER
+  // ---------------------------
+  const float DEG2RAD        = 3.14159265f / 180.0f;
+  const float TURN_THRESHOLD = 35.0f * DEG2RAD;      // 5 degrees
+  const float TURN_GAIN      = 3.0f;              // spin aggressiveness
+  const int   TURN_LIMIT     = 20;                  // max spin speed
+
+  if (fabs(err) > TURN_THRESHOLD) {
+    // TURN IN PLACE (no forward motion)
+    float turnRaw = err * TURN_GAIN;
+    float turn    = constrain((int)turnRaw, -TURN_LIMIT, TURN_LIMIT);
+
+    // Spin: left and right opposite
+    targetSpeed      = -turn;
+    rightTargetSpeed =  turn;
+
+    return false;   // still rotating toward target
   }
 
-  float err = desired - robotHeading;
-  while (err >  3.14159f) err -= 6.28318f;
-  while (err < -3.14159f) err += 6.28318f;
+  // ---------------------------
+  // DRIVE TOWARD TARGET WITH STEERING
+  // ---------------------------
+  float speed = 10; // dist * 0.05f;              // distance-based gain
+  speed = constrain((int)speed, 25, 80);   // mm→RPM scaling
 
-  float turn  = err  * 150.0f;
-  float speed = dist * 0.05f;
-
-  turn = constrain((int)turn, -50, 50);
-
-  if (viveDirectionMode == 0) {
-    // Forward
-    speed = constrain((int)speed, 20, 80);
-  } else {
-    // Backward
-    speed = -constrain((int)speed, 20, 80);
+  if (backward) {
+    speed = -speed;
   }
 
-  targetSpeed      = speed - turn;
-  rightTargetSpeed = speed + turn;
+  // Steering correction while moving
+  const float STEER_GAIN  = 5.0f;
+  const int   STEER_LIMIT = 15;
+  float steerRaw = err * STEER_GAIN;
+  float steer    = constrain((int)steerRaw, -STEER_LIMIT, STEER_LIMIT);
+
+  // Differential drive mapping
+  float leftCmd  = speed - steer;
+  float rightCmd = speed + steer;
+
+  targetSpeed      = leftCmd;
+  rightTargetSpeed = rightCmd;
 
   return false;
 }
@@ -590,7 +642,6 @@ bool viveGoToPointStep() {
 // Queue-based BFS navigation: follow first node in nodeQueue
 void followQueueStep() {
   if (!vivePoseValid()) {
-    Serial.println("Skipping queue follow: Vive invalid (0,0)");
     stopMotor();
     return;
   }
@@ -644,7 +695,7 @@ void handleSetSpeed() {
     }
 
     // Differential mapping: steering positive → turn right (left faster)
-    targetSpeed      = -baseSpeed - steeringValue;
+    targetSpeed      =  baseSpeed + steeringValue;
     rightTargetSpeed =  baseSpeed - steeringValue;
 
     targetSpeed      = constrain(targetSpeed,      -120, 120);
@@ -821,7 +872,7 @@ void handleGoToPoint() {
     controlMode = MODE_VIVE;
 
     String msg = "Moving ";
-    msg += (viveDirectionMode == 0 ? "(FORWARD)" : "(BACKWARD)");
+    msg += (viveDirectionMode == 0 ? "(FORWARD/BACK AUTO)" : "(LEGACY DIR MODE)");
     server.send(200, "text/plain", msg);
   } else {
     server.send(400, "text/plain", "Missing x or y");
@@ -834,23 +885,22 @@ void handleGoToPoint() {
 // - Concatenate new route to the queue (without duplicating start node)
 // - Start following queue immediately in MODE_VIVE
 void handleQueueClear(){
-  nodeQueue.clear();        // Remove all planned nodes
-    paused = false;           // Optionally reset paused state
-
+    nodeQueue.clear();        // Remove all planned nodes
+    stopMotor();
     server.send(200, "text/plain", "Queue cleared");
 
     Serial.println("[QUEUE] Cleared");
 
     // If queue cleared while in VIVE mode, stop motors
     if (controlMode == MODE_VIVE) {
-        baseSpeed = 0;
-        steering = 0;
+        stopMotor();
     }
 }
+
 void handleQueueSkip() {
     if (!nodeQueue.empty()) {
         int skipped = nodeQueue.front();
-        nodeQueue.pop_front();
+        nodeQueue.erase(nodeQueue.begin());
 
         String msg = "Skipped node ";
         msg += skipped;
@@ -858,12 +908,6 @@ void handleQueueSkip() {
 
         Serial.printf("[QUEUE] Skipped node %d\n", skipped);
     }
-    else {
-        server.send(200, "text/plain", "Queue already empty");
-        Serial.println("[QUEUE] Skip requested but queue empty");
-        return;
-    }
-
 }
 
 void handleRoute() {
@@ -946,7 +990,7 @@ void handleRoute() {
   // Start following the route
   // =========================
   controlMode = MODE_VIVE;
-  viveDirectionMode = 0;
+  viveDirectionMode = 0;   // kept for compatibility, but motion uses auto dir
 
   // =========================
   // Send back full queue as JSON
@@ -1033,13 +1077,14 @@ void setup() {
   server.on("/mode",        handleMode);
   server.on("/gotopoint",   handleGoToPoint);
   server.on("/route",       handleRoute);
-  server.on("/queue/clear", handleQueueClear):
+  server.on("/queue/clear", handleQueueClear);
+  server.on("/queue/skip",  handleQueueSkip);
   server.begin();
 
   // Vive sensors
   Serial.println("Vive begin");
-  viveFront.begin();
-  viveBack.begin();
+  viveLeft.begin();
+  viveRight.begin();
 
   lastSpeedCalc     = millis();
   lastControlUpdate = millis();
@@ -1054,7 +1099,7 @@ void setup() {
   graph.addNode(3530,6350, {3,11});         // Node 4
   graph.addNode(5000,5630, {0,6,7});        // Node 5
   graph.addNode(5000,5250, {5,7,8,9});      // Node 6
-  graph.addNode(4320,5100, {2,5,6,8,1});    // Node 7
+  graph.addNode(4320,5100, {2,5,6,8,10});   // Node 7
   graph.addNode(4640,4770, {6,7,5,1,2});    // Node 8
   graph.addNode(5100,4150, {6,12});         // Node 9
   graph.addNode(4000,4150, {7});            // Node 10
@@ -1076,13 +1121,12 @@ void loop() {
   // readTOFSensors();
 
   // Vive pose
-  readDualVive();
-  computeVivePose();
+  
 
   // Mode behaviors
   switch (controlMode) {
     case MODE_MANUAL:
-      // targetSpeed & rightTargetSpeed set by /setspeed
+      // targetSpeed & rightTargetSpeed set ry /setspeed
       robotX = 0;
       robotY = 0;
       break;
@@ -1096,11 +1140,37 @@ void loop() {
       break;
 
     case MODE_VIVE:
+      if (millis() - lastVive >= Vive_PERIOD){
+      readDualVive();
+      computeVivePose();
+      lastVive = millis();
+      }
       if (!nodeQueue.empty()) {
         followQueueStep();
       } else {
         // No queued route – if you used /gotopoint, you can still call step once:
         // (optional) viveGoToPointStep();
+      }
+      if (millis() - lastPrint >= Print_PERIOD) {
+        // Existing debug print
+        Serial.print("X, Y: ");
+        Serial.print(robotX);
+        Serial.print(", ");
+        Serial.println(robotY);
+        Serial.print("Heading: ");
+        Serial.println(robotHeading);
+        Serial.print("Desired Heading: ");
+        Serial.println(robotHeading);
+
+        // NEW: PRINT QUEUE
+        Serial.print("QUEUE: [");
+        for (int i = 0; i < (int)nodeQueue.size(); i++) {
+          Serial.print(nodeQueue[i]);
+          if (i < (int)nodeQueue.size() - 1) Serial.print(",");
+        }
+        Serial.println("]");
+
+        lastPrint = millis();
       }
       break;
   }
@@ -1112,25 +1182,5 @@ void loop() {
   if (millis() - lastControlUpdate >= CONTROL_PERIOD) {
     updateMotorControl();
     lastControlUpdate = millis();
-  }
-
-  if (millis() - lastPrint >= Print_PERIOD) {
-    // Existing debug print
-    Serial.print("X, Y: ");
-    Serial.print(robotX);
-    Serial.print(", ");
-    Serial.println(robotY);
-    Serial.print("Heading: ");
-    Serial.println(robotHeading);
-
-    // NEW: PRINT QUEUE
-    Serial.print("QUEUE: [");
-    for (int i = 0; i < (int)nodeQueue.size(); i++) {
-      Serial.print(nodeQueue[i]);
-      if (i < (int)nodeQueue.size() - 1) Serial.print(",");
-    }
-    Serial.println("]");
-
-    lastPrint = millis();
   }
 }

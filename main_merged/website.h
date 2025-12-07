@@ -176,8 +176,11 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       <div class="panel bfs-section">
         <h3>BFS Route Planner</h3>
         <div class="bfs-input-row">
+          <span>Start Node (optional):</span>
+          <input type="number" id="bfsStart" min="0" max="15" step="1" placeholder="">  
           <span>Goal Node Index:</span>
           <input type="number" id="bfsGoal" min="0" max="15" step="1" value="0">
+          
           <button onclick="callRoute()">Add Route</button>
         </div>
       </div>
@@ -320,20 +323,30 @@ MODE  : ${data.mode}`;
           console.log(err);
         });
     }
-    setInterval(refreshStatus, 200);
+    setInterval(refreshStatus, 1000);
 
     // ================== BFS ROUTE CALL ==================
     function callRoute() {
       const goal = document.getElementById('bfsGoal').value;
+      const start = document.getElementById('bfsStart').value;
+
       if (goal === '') return;
-      fetch('/route?goal=' + goal)
+
+      let url = '/route?goal=' + goal;
+
+      // Append start ONLY if user typed something
+      if (start !== null && start !== '') {
+        url += '&start=' + start;
+      }
+
+      fetch(url)
         .then(r => r.text())
         .then(t => {
           console.log('Route response:', t);
-          // Refresh immediately so queue panel updates without waiting
-          refreshStatus();
+          refreshStatus();  // Update queue immediately
         });
     }
+
 
     // ================== QUEUE DISPLAY ==================
     function updateQueueUI(queueArr) {
@@ -421,7 +434,6 @@ MODE  : ${data.mode}`;
 
       setControl(speed, steer);
     }
-    setInterval(pollGamepad, 50);
 
     // ================== KEYBOARD CONTROL ==================
     document.addEventListener('keydown', (e) => {

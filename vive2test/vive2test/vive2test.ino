@@ -2,8 +2,8 @@
 #include <math.h>
 
 // ================= PIN SETUP ==================
-#define SIGNALPIN_REAR   1  
-#define SIGNALPIN_FRONT  14  
+#define SIGNALPIN_REAR   5
+#define SIGNALPIN_FRONT  4  
 
 Vive510 viveRear(SIGNALPIN_REAR); 
 Vive510 viveFront(SIGNALPIN_FRONT);
@@ -17,7 +17,7 @@ struct Coord {
 // ============== MEDIAN FILTER ==============
 uint32_t med3filt(uint32_t a, uint32_t b, uint32_t c) {
   uint32_t middle;
-  if ((a <= b) && (a <= c))
+  if ((a <= b) && (a <= c))orm
     middle = (b <= c) ? b : c;  
   else if ((b <= a) && (b <= c))
     middle = (a <= c) ? a : c;
