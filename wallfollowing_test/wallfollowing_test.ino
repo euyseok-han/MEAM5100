@@ -31,27 +31,26 @@
 #define RIGHT_MOTOR          1   // Motor identifier
 
 // Left Motor & Encoder
-#define ENCODER_A            1   // GPIO 1
-#define ENCODER_B            2   // GPIO 2
+#define ENCODER_A           15   // GPIO 1
+#define ENCODER_B           16   // GPIO 2
 #define MOTOR_RPWM          18   // GPIO 18 - Forward
 #define MOTOR_LPWM          17   // GPIO 17 - Reverse
 
 // Right Motor & Encoder
-#define RIGHT_ENCODER_A     15   // GPIO 15
-#define RIGHT_ENCODER_B     16   // GPIO 16
+#define RIGHT_ENCODER_A      1   // GPIO 1
+#define RIGHT_ENCODER_B      2   // GPIO 2
 #define RIGHT_MOTOR_RPWM    41   // GPIO 41 - Forward
 #define RIGHT_MOTOR_LPWM    42   // GPIO 42 - Reverse
 
-// I2C 1 (Front TOF + Side Front TOF)
-#define I2C1_SDA            11   // GPIO 11 (SDA)
-#define I2C1_SCL            12   // GPIO 12 (SCL)
-#define TOF_XSHUT_RIGHT1    13   // VL53L0X (side front) XSHUT
-#define TOF_XSHUT_FRONT     14   // VL53L1X (front) XSHUT
+// I2C Pins
+#define I2C_SDA             47   // GPIO 47 (SDA)
+#define I2C_SCL             48   // GPIO 48 (SCL)
 
-// I2C 2 (IMU + Side Back TOF)
-#define I2C2_SDA            47   // GPIO 19 (SDA)
-#define I2C2_SCL            48   // GPIO 20 (SCL)
-#define TOF_XSHUT_RIGHT2    21   // VL53L0X (side back) XSHUT
+// Multiplexer Sensor Bus Channels
+#define TOF_FRONT_BUS        0   // Multiplexer Bus 0 (Front TOF)
+#define TOF_SIDE_FRONT_BUS   1   // Multiplexer Bus 1 (Side Front TOF)
+#define TOF_SIDE_BACK_BUS    2   // Multiplexer Bus 2 (Side Back TOF)
+#define IMU_BUS              3   // Multiplexer Bus 3 (IMU)
 
 // Vive tracker pins
 #define VIVE_FRONT_PIN       4
@@ -102,10 +101,6 @@ struct PIDController {
 
 PIDController leftPID;
 PIDController rightPID;
-
-// ==================== I2C BUSES ====================
-TwoWire I2C1 = TwoWire(0);  // I2C bus 1 for Front TOF + Side Front TOF
-TwoWire I2C2 = TwoWire(1);  // I2C bus 2 for IMU + Side Back TOF
 
 // ==================== TOF SENSORS ====================
 Adafruit_VL53L0X frontTOF = Adafruit_VL53L0X();   // Front TOF on I2C1
@@ -190,6 +185,7 @@ unsigned long lastTOFRead = 0;
 const unsigned long CONTROL_PERIOD = 50;      // ms
 const unsigned long SPEED_CALC_PERIOD = 100;  // ms
 const unsigned long TOF_READ_PERIOD = 50;     // ms
+const unsigned long IMU_READ_PERIOD = 50;     // ms
 
 // ==================== UTILS ====================
 uint32_t med3(uint32_t a, uint32_t b, uint32_t c) {
@@ -300,8 +296,18 @@ void calculateSpeed() {
   }
 }
 
+// ==================== MULTIPLEXER =====================
+void setMultiplexerBus(uint8_t bus){
+  Wire.beginTransmission(0x70);  // TCA9548A address is 0x70
+  Wire.write(1 << bus);          // send byte to select bus
+  Wire.endTransmission();
+  // Serial.print(bus);
+  delay(2);
+}
+
 // ==================== MPU6050 GYRO ====================
 float readGyroZdeg() {
+  setMultiplexerBus(IMU_BUS);
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
 
@@ -322,7 +328,7 @@ float readGyroZdeg() {
 void updateGyroIntegration() {
   unsigned long now = millis();
   float dt = (now - lastGyroTime) / 1000.0f;
-  if (dt <= 0) return;
+  if (dt <= IMU_READ_PERIOD) return;
   lastGyroTime = now;
 
   currentAngle += readGyroZdeg() * dt;
@@ -384,6 +390,7 @@ void readTOFSensors() {
   if (now - lastTOFRead < TOF_READ_PERIOD) return;
 
   // VL53L0X front
+  setMultiplexerBus(TOF_FRONT_BUS);
   VL53L0X_RangingMeasurementData_t measureFront;
   frontTOF.rangingTest(&measureFront, false);
   if (measureFront.RangeStatus != 4) {  // phase failures have incorrect data
@@ -394,6 +401,7 @@ void readTOFSensors() {
   }
 
   // VL53L0X right front
+  setMultiplexerBus(TOF_SIDE_FRONT_BUS);
   VL53L0X_RangingMeasurementData_t measureRight1;
   rightTOF.rangingTest(&measureRight1, false);
   if (measureRight1.RangeStatus != 4) {  // phase failures have incorrect data
@@ -404,6 +412,7 @@ void readTOFSensors() {
   }
 
   // VL53L0X right back
+  setMultiplexerBus(TOF_SIDE_BACK_BUS);
   VL53L0X_RangingMeasurementData_t measureRight2;
   right2TOF.rangingTest(&measureRight2, false);
   if (measureRight2.RangeStatus != 4) {  // phase failures have incorrect data
@@ -779,86 +788,73 @@ void setup() {
   server.on("/gotopoint", handleGoToPoint);
   server.begin();
 
-  // I2C buses initialization
-  I2C1.begin(I2C1_SDA, I2C1_SCL, 100000);
-  I2C2.begin(I2C2_SDA, I2C2_SCL, 100000);
-
-  pinMode(TOF_XSHUT_FRONT, OUTPUT);
-  pinMode(TOF_XSHUT_RIGHT1, OUTPUT);
-  pinMode(TOF_XSHUT_RIGHT2, OUTPUT);
-
-  // Shutdown all sensors initially
-  digitalWrite(TOF_XSHUT_FRONT, LOW);
-  digitalWrite(TOF_XSHUT_RIGHT1, LOW);
-  digitalWrite(TOF_XSHUT_RIGHT2, LOW);
-  delay(10);
+  // I2C bus initialization
+  Wire.begin(I2C_SDA, I2C_SCL);
 
   // Initialize front sensor (VL53L0X on I2C1)
-  digitalWrite(TOF_XSHUT_FRONT, HIGH);
-  delay(10);
-  if (!frontTOF.begin(0x30, false, &I2C1)) {
-    Serial.println("VL53L0X front (I2C1) init failed!");
+  setMultiplexerBus(TOF_FRONT_BUS);
+  if (!frontTOF.begin()) {
+    Serial.println("VL53L0X front init failed!");
   } else {
-    Serial.println("VL53L0X front initialized on I2C1");
+    Serial.println("VL53L0X front initialized!");
   }
 
-  // // Initialize side front sensor (VL53L0X on I2C1)
-  // digitalWrite(TOF_XSHUT_RIGHT1, HIGH);
-  // delay(10);
-  // if (!rightTOF.begin(0x31, false, &I2C1)) {
-  //   Serial.println("VL53L0X side front (I2C1) init failed!");
-  // } else {
-  //   Serial.println("VL53L0X side front initialized on I2C1");
-  // }
+  // Initialize side front sensor (VL53L0X on I2C1)
+  setMultiplexerBus(TOF_SIDE_FRONT_BUS);
+  if (!rightTOF.begin()) {
+    Serial.println("VL53L0X side front init failed!");
+  } else {
+    Serial.println("VL53L0X side front initialized!");
+  }
 
-  // // MPU6050 on I2C2
-  // if (mpu.begin(0x68, &I2C2)) {
-  //   mpu.setAccelerometerRange(MPU6050_RANGE_4_G);
-  //   mpu.setGyroRange(MPU6050_RANGE_500_DEG);
-  //   mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
-  //   // Calibrate Z offset briefly (assume still)
-  //   sensors_event_t a, g, temp;
-  //   float sum = 0;
-  //   for (int i = 0; i < 50; i++) { mpu.getEvent(&a, &g, &temp); sum += g.gyro.z; delay(10); }
-  //   gyroZOffset = sum / 50.0f;
-  //   // Initialize low-pass filter with calibrated zero value
-  //   filteredGyroZ = 0.0;
-  //   lastGyroTime = millis();
-  //   Serial.println("MPU6050 initialized on I2C2");
-  // } else {
-  //   Serial.println("MPU6050 not found on I2C2");
-  // }
+  // Initialize side back sensor (VL53L0X on I2C2) - no address change needed, it's alone with IMU
+  setMultiplexerBus(TOF_SIDE_BACK_BUS);
+  if (!right2TOF.begin()) {
+    Serial.println("VL53L0X side back init failed!");
+  } else {
+    Serial.println("VL53L0X side back initialized!");
+  }
 
-  // // Initialize side back sensor (VL53L0X on I2C2) - no address change needed, it's alone with IMU
-  // digitalWrite(TOF_XSHUT_RIGHT2, HIGH);
-  // delay(10);
-  // if (!right2TOF.begin(0x29, false, &I2C2)) {
-  //   Serial.println("VL53L0X side back (I2C2) init failed!");
-  // } else {
-  //   Serial.println("VL53L0X side back initialized on I2C2");
-  // }
+  // MPU6050 (IMU)
+  setMultiplexerBus(IMU_BUS);
+  if (mpu.begin()) {
+    mpu.setAccelerometerRange(MPU6050_RANGE_4_G);
+    mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+    mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+    // Calibrate Z offset briefly (assume still)
+    sensors_event_t a, g, temp;
+    float sum = 0;
+    for (int i = 0; i < 50; i++) { mpu.getEvent(&a, &g, &temp); sum += g.gyro.z; delay(10); }
+    gyroZOffset = sum / 50.0f;
+    // Initialize low-pass filter with calibrated zero value
+    filteredGyroZ = 0.0;
+    lastGyroTime = millis();
+    Serial.println("MPU6050 initialized on I2C2");
+  } else {
+    Serial.println("MPU6050 not found on I2C2");
+  }
 
   // // // Vive sensors
   // // viveFront.begin();
   // // viveBack.begin();
 
-  // lastSpeedCalc = millis();
-  // lastControlUpdate = millis();
-  // lastTOFRead = millis();
-  // lastPrint = millis();
+  lastSpeedCalc = millis();
+  lastControlUpdate = millis();
+  lastTOFRead = millis();
+  lastPrint = millis();
 }
 
 // ==================== LOOP ====================
 void loop() {
   server.handleClient();
 
-  // // Sensors
-  // readTOFSensors();
+  // Sensors
+  readTOFSensors();
   // // readDualVive();
   // // computeVivePose();
 
-  // // Always update gyro for all modes (needed for mode switching)
-  // updateGyroIntegration();
+  // Always update gyro for all modes (needed for mode switching)
+  updateGyroIntegration();
 
   // // Mode behaviors
   // switch (controlMode) {
