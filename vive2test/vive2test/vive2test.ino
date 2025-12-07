@@ -17,7 +17,7 @@ struct Coord {
 // ============== MEDIAN FILTER ==============
 uint32_t med3filt(uint32_t a, uint32_t b, uint32_t c) {
   uint32_t middle;
-  if ((a <= b) && (a <= c))orm
+  if ((a <= b) && (a <= c))
     middle = (b <= c) ? b : c;  
   else if ((b <= a) && (b <= c))
     middle = (a <= c) ? a : c;

@@ -146,6 +146,20 @@ enum ControlMode {
   MODE_VIVE   = 2
 };
 
+// Adjust these
+#define INIT_SAMPLES 10
+#define MAX_STEP 200      // max allowed change per frame
+#define ALPHA 0.25f       // smoothing factor (0=no smoothing, 1=no smoothing)
+
+struct ViveInit {
+    uint16_t buf[INIT_SAMPLES];
+    int count = 0;
+    bool initialized = false;
+};
+
+
+
+
 ControlMode controlMode = MODE_MANUAL;
 
 // ==================== VIVE (dual sensors, used as LEFT + RIGHT) ====================
@@ -155,13 +169,15 @@ Vive510 viveRight(VIVE_RIGHT_PIN);     // left Vive tracker
 uint16_t lx, ly, rx, ry;
 uint16_t lx0, ly0, lx1, ly1, lx2, ly2;
 uint16_t rx0, ry0, rx1, ry1, rx2, ry2;
+// Per-axis filter initializers
+ViveInit initLX, initLY, initRX, initRY;
 
 bool leftValid = false;
 bool rightValid  = false;
 
 float robotX = 0, robotY = 0;
 float robotHeading = 0;         // radians
-
+float desiredHeading = 0;
 int viveTargetX = 0;
 int viveTargetY = 0;
 int viveDirectionMode = 0;      // kept but not used in new logic
@@ -260,33 +276,61 @@ float normalizeAngle(float a) {
     return a;
 }
 
-uint16_t filterVive(uint16_t raw, uint16_t last1, uint16_t last2, uint16_t lastGood) {
+uint16_t median10(uint16_t *arr) {
+    uint16_t temp[INIT_SAMPLES];
+    memcpy(temp, arr, sizeof(uint16_t) * INIT_SAMPLES);
 
-    // voting window of previous good values
-    // last1 = most recent, last2 = older
-    // lastGood = global stable value
-    if (robotX == 0 || robotY == 0) return raw;
-    // If any value is clearly invalid (0 or tiny), reject immediately
-    if (raw < 100 || raw > 9000)
-        return lastGood;
-    
-    // Compute expected next value (smooth motion)
-    // Weighted average vote of history
-    float predicted = 0.5f * last1 + 0.3f * last2 + 0.2f * lastGood;
+    // simple sort (10 elements → cheap)
+    for (int i = 0; i < INIT_SAMPLES; i++)
+        for (int j = i + 1; j < INIT_SAMPLES; j++)
+            if (temp[j] < temp[i])
+                std::swap(temp[i], temp[j]);
 
-    // Max allowed change per frame
-    const int MAX_STEP = 250;    // Vive rarely moves >200 in one frame
-                                 // tune 150~300 depending on speed
-
-    // If raw diverges too far from predicted → it's noise → reject
-    if (abs((int)raw - (int)predicted) > MAX_STEP) {
-        return lastGood;   // ignore outlier
-    }
-
-    // Otherwise accept raw and update stable value
-    return raw;
+    return temp[INIT_SAMPLES / 2];  // median
 }
 
+
+uint16_t filterVive(uint16_t raw, uint16_t lastGood, ViveInit &init) {
+
+    // 1) Reject totally invalid values
+    if (raw < 100 || raw > 9000)
+        return lastGood;
+
+    // ======================================================
+    // 2) Initialization phase: collect 10 raw samples
+    // ======================================================
+    if (!init.initialized) {
+
+        init.buf[init.count++] = raw;
+
+        if (init.count < INIT_SAMPLES) {
+            // not enough samples yet
+            return raw;
+        }
+
+        // Once we have 10 samples → median initialize
+        uint16_t med = median10(init.buf);
+        init.initialized = true;
+        return med;
+    }
+
+    // ======================================================
+    // 3) Runtime filtering (after initialization)
+    // ======================================================
+
+    // ---- Velocity clamp (robot doesn't teleport) ----
+    int delta = (int)raw - (int)lastGood;
+
+    if (delta > MAX_STEP) delta = MAX_STEP;
+    if (delta < -MAX_STEP) delta = -MAX_STEP;
+
+    uint16_t limited = lastGood + delta;
+
+    // ---- Smoothing ----
+    float smoothed = lastGood * (1.0f - ALPHA) + limited * ALPHA;
+
+    return (uint16_t)smoothed;
+}
 // Find nearest graph node to current Vive pose
 int findNearestNode(float x, float y) {
   int best = -1;
@@ -489,9 +533,9 @@ void readDualVive() {
     lx0 = viveLeft.xCoord();
     ly0 = viveLeft.yCoord();
 
-    // continuity-based filter using lastGood = lx/ly
-    uint16_t lxf = filterVive(lx0, lx1, lx2, lx);
-    uint16_t lyf = filterVive(ly0, ly1, ly2, ly);
+    // continuity + voting filter with initialization
+    uint16_t lxf = filterVive(lx0, lx, initLX);
+    uint16_t lyf = filterVive(ly0, ly, initLY);
 
     if (lxf > 0 && lyf > 0) {
       lx = lxf;
@@ -510,8 +554,8 @@ void readDualVive() {
     rx0 = viveRight.xCoord();
     ry0 = viveRight.yCoord();
 
-    uint16_t rxf = filterVive(rx0, rx1, rx2, rx);
-    uint16_t ryf = filterVive(ry0, ry1, ry2, ry);
+    uint16_t rxf = filterVive(rx0, rx, initRX);
+    uint16_t ryf = filterVive(ry0, ry, initRY);
 
     if (rxf > 0 && ryf > 0) {
       rx = rxf;
@@ -592,7 +636,7 @@ bool viveGoToPointStep() {
   // Choose the direction with smaller heading error
   bool backward = (fabs(errB) < fabs(errF));
   float err     = backward ? errB : errF;
-
+  desiredHeading = backward ? desiredBackward : desiredForward;
   // ---------------------------
   // TURN-IN-PLACE vs DRIVE+STEER
   // ---------------------------
@@ -603,6 +647,7 @@ bool viveGoToPointStep() {
 
   if (fabs(err) > TURN_THRESHOLD) {
     // TURN IN PLACE (no forward motion)
+    
     float turnRaw = err * TURN_GAIN;
     float turn    = constrain((int)turnRaw, -TURN_LIMIT, TURN_LIMIT);
 
@@ -612,16 +657,14 @@ bool viveGoToPointStep() {
 
     return false;   // still rotating toward target
   }
-
+  Serial.println("turn whild moving! err is not big");
   // ---------------------------
   // DRIVE TOWARD TARGET WITH STEERING
   // ---------------------------
   float speed = 10; // dist * 0.05f;              // distance-based gain
   speed = constrain((int)speed, 25, 80);   // mm→RPM scaling
 
-  if (backward) {
-    speed = -speed;
-  }
+  
 
   // Steering correction while moving
   const float STEER_GAIN  = 5.0f;
@@ -630,6 +673,10 @@ bool viveGoToPointStep() {
   float steer    = constrain((int)steerRaw, -STEER_LIMIT, STEER_LIMIT);
 
   // Differential drive mapping
+  if (backward) {
+    speed = -speed;
+    steer = -steer;
+  }
   float leftCmd  = speed - steer;
   float rightCmd = speed + steer;
 
@@ -1160,7 +1207,7 @@ void loop() {
         Serial.print("Heading: ");
         Serial.println(robotHeading);
         Serial.print("Desired Heading: ");
-        Serial.println(robotHeading);
+        Serial.println(desiredHeading);
 
         // NEW: PRINT QUEUE
         Serial.print("QUEUE: [");
