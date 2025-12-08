@@ -438,8 +438,8 @@ void updateMotorControl() {
   float rightOut = calculatePID(rightPID, rightTargetSpeed, rightCurrentSpeed, dt);
 
   // NOTE: You had this form (current + PID); kept as-is.
-  setMotorPWM(currentSpeed + leftOut,       LEFT_MOTOR);
-  setMotorPWM(rightCurrentSpeed + rightOut, RIGHT_MOTOR);
+  setMotorPWM(leftOut,       LEFT_MOTOR);
+  setMotorPWM(rightOut, RIGHT_MOTOR);
 }
 
 // ==================== SPEED CALCULATION ====================
