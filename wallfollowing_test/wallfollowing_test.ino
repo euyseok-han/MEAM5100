@@ -31,16 +31,16 @@
 #define RIGHT_MOTOR          1   // Motor identifier
 
 // Left Motor & Encoder
-#define ENCODER_A            1   // GPIO 1
-#define ENCODER_B            2   // GPIO 2
-#define MOTOR_RPWM          18   // GPIO 41 - Forward
-#define MOTOR_LPWM          17   // GPIO 42 - Reverse
+#define ENCODER_A            15   // GPIO 1
+#define ENCODER_B            16   // GPIO 2
+#define MOTOR_RPWM           41   // GPIO 41 - Forward
+#define MOTOR_LPWM          42   // GPIO 42 - Reverse
 
 // Right Motor & Encoder
-#define RIGHT_ENCODER_A     15   // GPIO 1
-#define RIGHT_ENCODER_B     16   // GPIO 2
-#define RIGHT_MOTOR_RPWM    41   // GPIO 18 - Forward
-#define RIGHT_MOTOR_LPWM    42   // GPIO 17 - Reverse
+#define RIGHT_ENCODER_A     1    // GPIO 1
+#define RIGHT_ENCODER_B     2   // GPIO 2
+#define RIGHT_MOTOR_RPWM    18   // GPIO 18 - Forward
+#define RIGHT_MOTOR_LPWM    17   // GPIO 17 - Reverse
 
 // I2C Pins
 #define I2C_SDA             47   // GPIO 47 (SDA)
