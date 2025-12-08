@@ -185,6 +185,35 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         </div>
       </div>
 
+      <!-- WALL-FOLLOW CONTROL PANEL -->
+      <div class="panel" style="background:#e8fff5;">
+        <h3>Wall-Follow Controls</h3>
+
+        <div>
+          <button onclick="enableWall(1)">Enable Wall-Follow</button>
+          <button onclick="enableWall(0)" class="stop-btn">Disable</button>
+        </div>
+
+        <h4>Goal Distances (mm)</h4>
+        <label>Front Goal:</label>
+        <input id="frontGoal" type="number" value="150" min="50" max="800" step="10">
+        <br>
+        <label>Right Goal Front:</label>
+        <input id="rightGoal1" type="number" value="100" min="50" max="800" step="10">
+        <br>
+        <label>Right Goal Back:</label>
+        <input id="rightGoal2" type="number" value="100" min="50" max="800" step="10">
+        <button onclick="updateWallGoals()">Update Goals</button>
+
+        <h4>Wall-Follow PD</h4>
+        <label>Kp:</label>
+        <input id="wallKp" type="number" value="1.5" step="0.1">
+        <br>
+        <label>Kd:</label>
+        <input id="wallKd" type="number" value="0.8" step="0.05">
+        <button onclick="updateWallPD()">Update PD</button>
+      </div>
+
       <!-- CURRENT ROUTE QUEUE DISPLAY -->
       <div class="panel" style="background:#fff7e6;">
         <h3>Route Queue</h3>
@@ -207,6 +236,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
   <script>
     let currentSpeed = 0;
     let currentSteering = 0;
+    let wallPrefilled = false;
 
     // ================== DIRECTION INDICATOR ==================
     function updateDirectionIndicator(speed, steering) {
@@ -304,6 +334,7 @@ LEFT  : target=${data.leftTarget}  current=${data.leftCurrent}  pwm=${data.leftP
 RIGHT : target=${data.rightTarget} current=${data.rightCurrent} pwm=${data.rightPWM}
 ENC   : L=${data.leftEncoder}  R=${data.rightEncoder}
 POSE  : x=${data.vx}  y=${data.vy}  yaw=${data.yaw}
+TOF   : front=${data.front}  r1=${data.right1} r2=${data.right2}
 MODE  : ${data.mode}`;
           document.getElementById('statusBox').textContent = txt;
 
@@ -318,6 +349,29 @@ MODE  : ${data.mode}`;
 
           // Update Queue panel
           updateQueueUI(data.queue);
+
+          // Prefill Wall-Follow panel from status (if provided)
+          if (!wallPrefilled) {
+            const fg  = document.getElementById('frontGoal');
+            const rg1 = document.getElementById('rightGoal1');
+            const rg2 = document.getElementById('rightGoal2');
+            const wkp = document.getElementById('wallKp');
+            const wkd = document.getElementById('wallKd');
+
+            // Accept multiple possible key names
+            if (typeof data.frontGoalDistance !== 'undefined' && fg) fg.value = data.frontGoalDistance;
+            if (typeof data.rightGoalDistance1 !== 'undefined' && rg1) rg1.value = data.rightGoalDistance1;
+            if (typeof data.rightGoalDistance2 !== 'undefined' && rg2) rg2.value = data.rightGoalDistance2;
+
+            const kpVal = (typeof data.wallFollowKp !== 'undefined') ? data.wallFollowKp
+                          : (typeof data.wallKp !== 'undefined') ? data.wallKp : undefined;
+            const kdVal = (typeof data.wallFollowKd !== 'undefined') ? data.wallFollowKd
+                          : (typeof data.wallKd !== 'undefined') ? data.wallKd : undefined;
+            if (typeof kpVal !== 'undefined' && wkp) wkp.value = kpVal;
+            if (typeof kdVal !== 'undefined' && wkd) wkd.value = kdVal;
+
+            wallPrefilled = true;
+          }
         })
         .catch(err => {
           console.log(err);
@@ -391,6 +445,41 @@ MODE  : ${data.mode}`;
 
     function queueSkip() {
       fetch('/queue/skip').then(() => refreshStatus());
+    }
+
+    // ================== WALL-FOLLOW FUNCTIONS ==================
+    function enableWall(en) {
+      fetch('/wall/enable?enable=' + en)
+        .then(r => r.text())
+        .then(t => {
+          console.log("Wall mode:", t);
+          refreshStatus();
+        });
+    }
+
+    function updateWallGoals() {
+      const f  = document.getElementById('frontGoal').value;
+      const r1 = document.getElementById('rightGoal1').value;
+      const r2 = document.getElementById('rightGoal2').value;
+
+      const url = `/wall/goals?frontGoal=${f}&rightGoal1=${r1}&rightGoal2=${r2}`;
+
+      fetch(url).then(r => r.text()).then(t => {
+        console.log("Wall goals:", t);
+        refreshStatus();
+      });
+    }
+
+    function updateWallPD() {
+      const kp = document.getElementById('wallKp').value;
+      const kd = document.getElementById('wallKd').value;
+
+      fetch(`/wall/pd?kp=${kp}&kd=${kd}`)
+        .then(r => r.text())
+        .then(t => {
+          console.log("Wall PD:", t);
+          refreshStatus();
+        });
     }
 
     // ================== GAMEPAD SUPPORT ==================
