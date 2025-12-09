@@ -165,7 +165,7 @@ ViveBuffer initLX, initLY, initRX, initRY;
 bool leftValid  = false;
 bool rightValid = false;
 bool viveTargetDead = false;
-bool wasbackward = false;
+bool wasBackward = false;
 float robotX         = 0;
 float robotY         = 0;
 float robotHeading   = 0;
@@ -691,7 +691,6 @@ void computeVivePose() {
   }
 }
 
-// ========== VIVE GO-TO-POINT (Code A enhanced) ==========
 bool viveGoToPointStep() {
   if (!leftValid || !rightValid) {
     stopMotor();
@@ -717,14 +716,14 @@ bool viveGoToPointStep() {
   float errF = normalizeAngle(desiredForward  - robotHeading);
   float errB = normalizeAngle(desiredBackward - robotHeading);
 
-  wasbackward = (fabs(errB) < fabs(errF));
-  float err = wasbackward ? errB : errF;
-  desiredHeading = wasbackward ? desiredBackward : desiredForward;
+  wasBackward = (fabs(errB) < fabs(errF));
+  float err = wasBackward ? errB : errF;
+  desiredHeading = wasBackward ? desiredBackward : desiredForward;
 
   const float DEG2RAD        = (float)M_PI / 180.0f;
   const float TURN_THRESHOLD = 30.0f * DEG2RAD;
-  const float TURN_GAIN      = 30.0f;
-  const int   TURN_LIMIT     = 40;
+  const float TURN_GAIN      = 50.0f;
+  const int   TURN_LIMIT     = 60;
 
   if (fabs(err) > TURN_THRESHOLD) {
     float turnRaw = err * TURN_GAIN;
@@ -734,14 +733,14 @@ bool viveGoToPointStep() {
     return false;
   }
 
-  float speed = 40;
+  float speed = 70;
   speed = constrain((int)speed, 25, 80);
   const float STEER_GAIN  = 5.0f;
-  const int   STEER_LIMIT = 15;
+  const int   STEER_LIMIT = 30;
   float steerRaw = err * STEER_GAIN;
   float steer    = constrain((int)steerRaw, -STEER_LIMIT, STEER_LIMIT);
 
-  if (wasbackward) {
+  if (wasBackward) {
     speed = -speed;
     steer = steer;
   }
@@ -776,32 +775,23 @@ void followQueueStep() {
 
   bool reached = viveGoToPointStep();
   if (reached) {
-    // Dead point: do 2x forward/back pulses before popping
     if (viveTargetDead) {
-      int hitSpeed = wasbackward ? -120 : 20;
-      
-      for (int k = 0; k < 4; k++) {
+      int hitSpeed = wasBackward ? -100 : 100;
+      for (int k = 0; k < 3; k++) {
         rawSetMotorPWM( hitSpeed, LEFT_MOTOR);
         rawSetMotorPWM( hitSpeed, RIGHT_MOTOR);
-        delay(900);
+        delay(700);
         rawSetMotorPWM(-hitSpeed, LEFT_MOTOR);
         rawSetMotorPWM(-hitSpeed, RIGHT_MOTOR);
-        delay(400);
+        delay(250);
       }
       stopMotor();
     }
 
     int removed = nodeQueue.front();
     nodeQueue.erase(nodeQueue.begin());
-    Serial.printf("Reached node %d\n", removed);
     viveTargetX = 0;
     viveTargetY = 0;
-    Serial.print("QUEUE: [");
-    for (int i = 0; i < (int)nodeQueue.size(); i++) {
-      Serial.print(nodeQueue[i]);
-      if (i < (int)nodeQueue.size() - 1) Serial.print(",");
-    }
-    Serial.println("]");
   }
 }
 
