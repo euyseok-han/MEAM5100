@@ -377,7 +377,6 @@ MODE  : ${data.mode}`;
           console.log(err);
         });
     }
-    setInterval(refreshStatus, 1000);
 
     // ================== BFS ROUTE CALL ==================
     function callRoute() {

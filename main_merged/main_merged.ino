@@ -55,7 +55,7 @@ WebServer server(80);
 // ========== CONTROL CONSTANTS ==========
 const int   PWM_FREQ           = 5000;
 const int   PWM_RESOLUTION     = 8;
-const float GOAL_REACHED_THRESHOLD = 400.0f; // mm radius for BFS nodes
+const float GOAL_REACHED_THRESHOLD = 70.0f; // mm radius for BFS nodes
 
 // ========== MOTOR & ENCODER ==========
 volatile long encoderCount      = 0;
@@ -155,11 +155,8 @@ uint16_t lx0, ly0, lx1, ly1, lx2, ly2;
 uint16_t rx0, ry0, rx1, ry1, rx2, ry2;
 
 struct ViveBuffer {
-    uint16_t buf[5];     // median filter window (after init)
-    uint16_t initBuf[20]; // initialization samples
-    int initCount = 0;
-    bool initialized = false;
-    uint16_t lastGood = 0;
+  uint16_t buf[5];
+  int count = 0;
 };
 
 ViveBuffer initLX, initLY, initRX, initRY;
@@ -187,8 +184,8 @@ const unsigned long TOF_READ_PERIOD   = 50;
 const unsigned long IMU_READ_PERIOD   = 50;
 const unsigned long PRINT_PERIOD      = 500;
 
-const unsigned long VIVE_READ_PERIOD       = 30;
-const unsigned long VIVE_MOVE_PERIOD       = 400;
+const unsigned long VIVE_READ_PERIOD       = 18;
+const unsigned long VIVE_MOVE_PERIOD       = 150;
 
 // ========== GRAPH + BFS (Code A) ==========
 class Node {
@@ -258,91 +255,38 @@ float normalizeAngle(float a) {
 }
 
 uint16_t median5(uint16_t a, uint16_t b, uint16_t c, uint16_t d, uint16_t e) {
-    uint16_t arr[5] = {a, b, c, d, e};
-
-    // simple 5-element selection sort: fast & tiny
-    for (int i = 0; i < 4; i++) {
-        for (int j = i + 1; j < 5; j++) {
-            if (arr[j] < arr[i]) {
-                uint16_t t = arr[i];
-                arr[i] = arr[j];
-                arr[j] = t;
-            }
-        }
+  uint16_t arr[5] = {a, b, c, d, e};
+  for (int i = 0; i < 4; i++) {
+    for (int j = i + 1; j < 5; j++) {
+      if (arr[j] < arr[i]) {
+        uint16_t t = arr[i];
+        arr[i] = arr[j];
+        arr[j] = t;
+      }
     }
-
-    return arr[2]; // median
+  }
+  return arr[2];
 }
-
-
 uint16_t filterVive(uint16_t raw, ViveBuffer &v) {
 
-    // Reject impossible raw values
-    if (raw < 100 || raw > 9000)
-        return v.lastGood;
+  // fill remaining slots until we have 5 samples
+  if (v.count < 5) {
+    v.buf[v.count++] = raw;
+    if (v.count < 5)
+      return raw;   // not enough samples yet → return raw
+  }  
 
-    // ---------------------------------------------------------
-    //  INIT PHASE — warm-up averaging of the first 20 samples
-    // ---------------------------------------------------------
-    if (!v.initialized) {
+  // shift buffer left
+  for (int i = 0; i < 4; i++)
+    v.buf[i] = v.buf[i+1];
 
-        // First valid sample
-        if (v.initCount == 0) {
-            v.initBuf[0] = raw;
-            v.initCount = 1;
-            v.lastGood = raw;  
-            return raw;
-        }
+  // put new sample
+  v.buf[4] = raw;
 
-        // Reject huge jumps during initialization
-        if (abs((int)raw - (int)v.lastGood) > MAX_JUMP)
-            return v.lastGood;
-
-        // Accept into initialization buffer
-        v.initBuf[v.initCount++] = raw;
-        v.lastGood = raw;
-
-        // Initialization not done yet
-        if (v.initCount < 20)
-            return raw;
-
-        // ----------------------------------------
-        // FINISH INITIALIZATION: compute average
-        // ----------------------------------------
-        long sum = 0;
-        for (int i = 0; i < 20; i++) sum += v.initBuf[i];
-
-        uint16_t mean = sum / 20;
-        v.lastGood = mean;
-        v.initialized = true;
-
-        // fill buf[] initial window
-        for (int i = 0; i < 5; i++)
-            v.buf[i] = mean;
-
-        return mean;
-    }
-
-    // ---------------------------------------------------------
-    // NORMAL RUN MODE — reject jumps, sliding median-of-3
-    // ---------------------------------------------------------
-
-    // Reject teleport spikes
-    if (abs((int)raw - (int)v.lastGood) > MAX_JUMP)
-        raw = v.lastGood;
-
-    // Shift buffer left
-    for (int i = 0; i < 4; i++) 
-        v.buf[i] = v.buf[i+1];
-
-    v.buf[4] = raw;
-
-    // median of last 5 values
-    uint16_t out = median5(v.buf[0], v.buf[1], v.buf[2], v.buf[3], v.buf[4]);
-    v.lastGood = out;
-
-    return out;
+  // return median
+  return median5(v.buf[0], v.buf[1], v.buf[2], v.buf[3], v.buf[4]);
 }
+
 
 int findNearestNode(float x, float y) {
   int best = -1;
@@ -745,9 +689,9 @@ bool viveGoToPointStep() {
   desiredHeading = backward ? desiredBackward : desiredForward;
 
   const float DEG2RAD        = (float)M_PI / 180.0f;
-  const float TURN_THRESHOLD = 35.0f * DEG2RAD;
-  const float TURN_GAIN      = 5.0f;
-  const int   TURN_LIMIT     = 20;
+  const float TURN_THRESHOLD = 30.0f * DEG2RAD;
+  const float TURN_GAIN      = 30.0f;
+  const int   TURN_LIMIT     = 40;
 
   if (fabs(err) > TURN_THRESHOLD) {
     float turnRaw = err * TURN_GAIN;
@@ -757,7 +701,7 @@ bool viveGoToPointStep() {
     return false;
   }
 
-  float speed = 10;
+  float speed = 40;
   speed = constrain((int)speed, 25, 80);
   const float STEER_GAIN  = 5.0f;
   const int   STEER_LIMIT = 15;
@@ -849,6 +793,7 @@ void handleControl() {
 void handleStop() {
   stopMotor();
   controlMode = MODE_MANUAL;
+  
   server.send(200, "text/plain", "Motor stopped");
 }
 
@@ -1078,7 +1023,6 @@ void handleQueuePause() {
 // ========== SETUP ==========
 void setup() {
   Serial.begin(115200);
-  delay(300);
 
   pinMode(MOTOR_RPWM, OUTPUT);
   pinMode(MOTOR_LPWM, OUTPUT);
@@ -1182,15 +1126,27 @@ void setup() {
   lastVive          = millis();
 
   // Graph nodes (from Code A)
-  graph.addNode(5100,6330, {1,4,5});          // 0
-  graph.addNode(4570,6280, {0,4,5});        // 1
-  graph.addNode(4060,6350, {1,4,5});        // 2
-  graph.addNode(4060,6350, {});        // 3
+  graph.addNode(4230,5140,{1,2}); //0
+  graph.addNode(5000,5044,{0,3}); //1
+  graph.addNode(4200,5800,{0,3,4}); //2
+  graph.addNode(5066,5717,{1,2,4}); //3
+  graph.addNode(4570,6192,{2,3,5}); //4
+  graph.addNode(4445,6380,{4}); //5
 
-  graph.addNode(4555,5370, {0,1,5});         // 4
-  graph.addNode(4660,5350, {7});        // 5
-  graph.addNode(3200,4930, {5,7,8,9});      // 6
-  graph.addNode(4600,4642, {5});   // 7
+  // graph.addNode(,,{}); //4
+  // graph.addNode(,,{}); //5
+
+
+
+  // graph.addNode(5100,6330, {1,4,5});          // 0
+  // graph.addNode(4570,6280, {0,4,5});        // 1
+  // graph.addNode(4060,6350, {1,4,5});        // 2
+  // graph.addNode(4060,6350, {});        // 3
+
+  // graph.addNode(4555,5370, {0,1,5});         // 4
+  // graph.addNode(4660,5350, {7});        // 5
+  // graph.addNode(3200,4930, {5,7,8,9});      // 6
+  // graph.addNode(4600,4642, {5});   // 7
 
 //   graph.addNode(3200,4600, {6,7,5,1,2});    // 8
 
