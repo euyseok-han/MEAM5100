@@ -57,7 +57,7 @@ WebServer server(80);
 // ========== CONTROL CONSTANTS ==========
 const int   PWM_FREQ           = 5000;
 const int   PWM_RESOLUTION     = 8;
-const float GOAL_REACHED_THRESHOLD = 150.0f; // mm radius for BFS nodes
+const float GOAL_REACHED_THRESHOLD = 200.0f; // mm radius for BFS nodes
 
 // ========== MOTOR & ENCODER ==========
 volatile long encoderCount      = 0;
@@ -157,7 +157,7 @@ uint16_t lx0, ly0, lx1, ly1, lx2, ly2;
 uint16_t rx0, ry0, rx1, ry1, rx2, ry2;
 
 struct ViveBuffer {
-  uint16_t buf[5];
+  uint16_t buf[10];
   int count = 0;
 };
 
@@ -187,8 +187,8 @@ const unsigned long TOF_READ_PERIOD   = 50;
 const unsigned long IMU_READ_PERIOD   = 50;
 const unsigned long PRINT_PERIOD      = 500;
 
-const unsigned long VIVE_READ_PERIOD       = 18;
-const unsigned long VIVE_MOVE_PERIOD       = 100;
+const unsigned long VIVE_READ_PERIOD       = 15;
+const unsigned long VIVE_MOVE_PERIOD       = 150;
 
 // ========== GRAPH + BFS (Code A) ==========
 class Node {
@@ -258,10 +258,10 @@ float normalizeAngle(float a) {
 
 }
 
-uint16_t median5(uint16_t a, uint16_t b, uint16_t c, uint16_t d, uint16_t e) {
-  uint16_t arr[5] = {a, b, c, d, e};
-  for (int i = 0; i < 4; i++) {
-    for (int j = i + 1; j < 5; j++) {
+uint16_t median10(uint16_t a, uint16_t b, uint16_t c, uint16_t d, uint16_t e, uint16_t f, uint16_t g, uint16_t h, uint16_t i, uint16_t j) {
+  uint16_t arr[10] = {a, b, c, d, e, f, g, h, i, j};
+  for (int i = 0; i < 9; i++) {
+    for (int j = i + 1; j < 10; j++) {
       if (arr[j] < arr[i]) {
         uint16_t t = arr[i];
         arr[i] = arr[j];
@@ -269,47 +269,24 @@ uint16_t median5(uint16_t a, uint16_t b, uint16_t c, uint16_t d, uint16_t e) {
       }
     }
   }
-  return arr[2];
+  return arr[4];
 }
 uint16_t filterVive(uint16_t raw, ViveBuffer &v) {
 
-    static uint16_t lastGood = 0;
-
-    if (v.count >= 5) {
-        if (abs((int)raw - (int)lastGood) > MAX_JUMP) {
-            raw = lastGood;   // replace spike with last known good
-        }
-    }
-    if (v.count < 5) {
+    
+    if (v.count < 10) {
         v.buf[v.count++] = raw;
 
-        // When fully collected → compute stable median and init lastGood
-        if (v.count == 5) {
-            uint16_t m = median5(v.buf[0], v.buf[1], v.buf[2], v.buf[3], v.buf[4]);
-            lastGood = m;
+        if (v.count == 10) {
+            uint16_t m = median10(v.buf[0], v.buf[1], v.buf[2], v.buf[3], v.buf[4], v.buf[5], v.buf[6], v.buf[7], v.buf[8], v.buf[9]);
             return m;
         }
-
-        // Not enough samples yet → output raw safely
-        lastGood = raw;
         return raw;
     }
-
-    // ======================================================
-    // 3. Shift buffer + insert new sample
-    // ======================================================
-    for (int i = 0; i < 4; i++)
+    for (int i = 0; i < 9; i++)
         v.buf[i] = v.buf[i+1];
-
-    v.buf[4] = raw;
-
-    // ======================================================
-    // 4. Median filter
-    // ======================================================
-    uint16_t m = median5(v.buf[0], v.buf[1], v.buf[2], v.buf[3], v.buf[4]);
-
-    // Update lastGood AFTER median smoothing
-    lastGood = m;
+    v.buf[9] = raw;
+    uint16_t m = median10(v.buf[0], v.buf[1], v.buf[2], v.buf[3], v.buf[4], v.buf[5], v.buf[6], v.buf[7], v.buf[8], v.buf[9]);
 
     return m;
 }
@@ -659,39 +636,58 @@ void updateStateMachine() {
 void readDualVive() {
   leftValid  = false;
   rightValid = false;
+  // last good sample for pair-based spike rejection
+static uint16_t lastLX = 0, lastLY = 0;
 
-  if (viveLeft.status() != VIVE_RECEIVING) {
+if (viveLeft.status() != VIVE_RECEIVING) {
     viveLeft.sync(5);
-  } else {
+} else {
+    // shift history
     lx2 = lx1; ly2 = ly1;
     lx1 = lx0; ly1 = ly0;
-    lx0 = viveLeft.xCoord();
-    ly0 = viveLeft.yCoord();
-    uint16_t lxf = filterVive(lx0, initLX);
-    uint16_t lyf = filterVive(ly0, initLY);
-    if (lxf > 0 && lyf > 0) {
-      lx = lxf;
-      ly = lyf;
-      leftValid = true;
-    }
-  }
 
-  if (viveRight.status() != VIVE_RECEIVING) {
+    // new raw sample
+    uint16_t rawX = viveLeft.xCoord();
+    uint16_t rawY = viveLeft.yCoord();
+
+    // now push through the individual filters
+    uint16_t fx = filterVive(rawX, initLX);
+    uint16_t fy = filterVive(rawY, initLY);
+
+    // update outputs only after filtering
+    if (fx > 0 && fy > 0) {
+        lx = fx;
+        ly = fy;
+        leftValid = true;
+        lastLX = fx;
+        lastLY = fy;
+    }
+}
+
+static uint16_t lastRX = 0, lastRY = 0;
+
+if (viveRight.status() != VIVE_RECEIVING) {
     viveRight.sync(5);
-  } else {
+} else {
     rx2 = rx1; ry2 = ry1;
     rx1 = rx0; ry1 = ry0;
-    rx0 = viveRight.xCoord();
-    ry0 = viveRight.yCoord();
-    uint16_t rxf = filterVive(rx0, initRX);
-    uint16_t ryf = filterVive(ry0, initRY);
-    if (rxf > 0 && ryf > 0) {
-      rx = rxf;
-      ry = ryf;
-      rightValid = true;
+
+    uint16_t rawX = viveRight.xCoord();
+    uint16_t rawY = viveRight.yCoord();
+
+    uint16_t fx = filterVive(rawX, initRX);
+    uint16_t fy = filterVive(rawY, initRY);
+
+    if (fx > 0 && fy > 0) {
+        rx = fx;
+        ry = fy;
+        rightValid = true;
+        lastRX = fx;
+        lastRY = fy;
     }
-  }
 }
+}
+
 
 void computeVivePose() {
   if (leftValid && rightValid) {
@@ -757,25 +753,25 @@ bool viveGoToPointStep(bool isDead=false) {
     return false;
   }
   
-  if (dist < GOAL_REACHED_THRESHOLD) {
+  else if (isDead) {
     stopMotor();
     return true;
   }
   
 
-  float speed = 85;
-  speed = constrain((int)speed, 25, 80);
+  float bfsSpeed = 70;
+  bfsSpeed = constrain((int)bfsSpeed, 25, 80);
   const float STEER_GAIN  = 10.0f;
   const int   STEER_LIMIT = 30;
   float steerRaw = err * STEER_GAIN;
   float steer    = constrain((int)steerRaw, -STEER_LIMIT, STEER_LIMIT);
 
   if (wasBackward) {
-    speed = -speed;
+    bfsSpeed = -bfsSpeed;
     steer = steer;
   }
-  float leftCmd  = speed - steer;
-  float rightCmd = speed + steer;
+  float leftCmd  = bfsSpeed - steer;
+  float rightCmd = bfsSpeed + steer;
 
   targetSpeed      = leftCmd;
   rightTargetSpeed = rightCmd;
@@ -1193,15 +1189,17 @@ void setup() {
   lastVive          = millis();
 
   // Graph nodes (from Code A)
-    graph.addNode(4300,5200,{1,2}); //0
-  graph.addNode(5000,5224,{0,3}); //1
-  graph.addNode(4220,4240,{0,3,4}); //2
+  graph.addNode(4150,5200,{1,2,4}); //0
+  graph.addNode(5000,5224,{0,3,4}); //1
+  graph.addNode(4220,6030,{0,3,4}); //2
   graph.addNode(5000,6000,{1,2,4}); //3
-  graph.addNode(6150,6150,{2,3,5}); //4
-  graph.addNode(6500,6500,{4}, true); //5
-  graph.addNode(6480,6500,{4,7}); //6 small neck near tower
-  graph.addNode(4800,4900,{6,8}); //7 point to the ramp(corner)
-  graph.addNode(4700,4700,{7}); //8 on the ramp
+  graph.addNode(4450,6130,{2,3,5}); //4
+  graph.addNode(4420,6370,{4}, true); //5
+  graph.addNode(3930,6442,{4,7}); //6 small neck near tower
+  graph.addNode(3830,6342,{6,8}); //7 small neck near tower2(deep)
+
+  graph.addNode(3111,6480       ,{7,9}); //8 point to the ramp(corner)
+  graph.addNode(2800,4740,{8}); //9 on the ramp
 
 
 }
