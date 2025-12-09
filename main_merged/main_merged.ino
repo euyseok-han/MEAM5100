@@ -1038,7 +1038,15 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(ENCODER_A),       encoderISR,      RISING);
   attachInterrupt(digitalPinToInterrupt(RIGHT_ENCODER_A), rightEncoderISR, RISING);
 
-  // WiFi
+  // WiFi with static IP
+  IPAddress local_IP(192, 168, 1, 111);
+  IPAddress gateway(192, 168, 1, 1);
+  IPAddress subnet(255, 255, 255, 0);
+
+  if (!WiFi.config(local_IP, gateway, subnet)) {
+    Serial.println("Failed to configure static IP");
+  }
+
   WiFi.begin(ssid, password);
   Serial.print("Connecting to WiFi ");
   Serial.println(ssid);
