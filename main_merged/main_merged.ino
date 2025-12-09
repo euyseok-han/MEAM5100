@@ -790,8 +790,7 @@ void followQueueStep() {
 
     int removed = nodeQueue.front();
     nodeQueue.erase(nodeQueue.begin());
-    viveTargetX = 0;
-    viveTargetY = 0;
+    
   }
 }
 
@@ -1031,9 +1030,6 @@ void handleRoute() {
 
 void handleQueueClear() {
   nodeQueue.clear();
-  viveTargetX = 0;
-  viveTargetY = 0;
-  stopMotor();
   server.send(200, "text/plain", "Queue cleared");
 }
 
