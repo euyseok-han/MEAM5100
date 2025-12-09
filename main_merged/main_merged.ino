@@ -691,7 +691,7 @@ void computeVivePose() {
   }
 }
 
-bool viveGoToPointStep() {
+bool viveGoToPointStep(bool isDead=false) {
   if (!leftValid || !rightValid) {
     stopMotor();
     return false;
@@ -705,11 +705,12 @@ bool viveGoToPointStep() {
   float dy = (float)viveTargetY - robotY;
   float dist = sqrtf(dx * dx + dy * dy);
 
-  if (dist < GOAL_REACHED_THRESHOLD) {
-    stopMotor();
-    return true;
+  if (!isDead){
+    if (dist < GOAL_REACHED_THRESHOLD) {
+      stopMotor();
+      return true;
+    }
   }
-
   float desiredForward  = atan2f(dy, dx);
   float desiredBackward = desiredForward + (float)M_PI;
   if (desiredBackward > (float)M_PI) desiredBackward -= 2.0f * (float)M_PI;
@@ -722,7 +723,7 @@ bool viveGoToPointStep() {
 
   const float DEG2RAD        = (float)M_PI / 180.0f;
   const float TURN_THRESHOLD = 30.0f * DEG2RAD;
-  const float TURN_GAIN      = 40.0f;
+  const float TURN_GAIN      = 25.0f;
   const int   TURN_LIMIT     = 60;
 
   if (fabs(err) > TURN_THRESHOLD) {
@@ -732,10 +733,16 @@ bool viveGoToPointStep() {
     rightTargetSpeed =  turn;
     return false;
   }
+  
+  if (dist < GOAL_REACHED_THRESHOLD) {
+    stopMotor();
+    return true;
+  }
+  
 
   float speed = 85;
   speed = constrain((int)speed, 25, 80);
-  const float STEER_GAIN  = 5.0f;
+  const float STEER_GAIN  = 10.0f;
   const int   STEER_LIMIT = 30;
   float steerRaw = err * STEER_GAIN;
   float steer    = constrain((int)steerRaw, -STEER_LIMIT, STEER_LIMIT);
@@ -773,7 +780,7 @@ void followQueueStep() {
   viveTargetY = graph.nodes[currentNode].y;
   viveTargetDead = graph.nodes[currentNode].dead;
 
-  bool reached = viveGoToPointStep();
+  bool reached = viveGoToPointStep(viveTargetDead);
   if (reached) {
     if (viveTargetDead) {
       int hitSpeed = wasBackward ? -100 : 100;
@@ -1166,10 +1173,10 @@ void setup() {
   graph.addNode(4900,5224,{0,3}); //1
   graph.addNode(4180,5980,{0,3,4}); //2
   graph.addNode(4950,6000,{1,2,4}); //3
-  graph.addNode(4500,6272,{2,3,5}); //4
+  graph.addNode(4500,6272,{2,3,5,6}); //4
   graph.addNode(4500,6380,{4}, true); //5
   graph.addNode(3860,6500,{4,7}); //6 small neck near tower
-  graph.addNode(3100,4900,{6,8}); //7 point to the ramp(corner)
+  graph.addNode(4800,4900,{6,8}); //7 point to the ramp(corner)
   graph.addNode(2950,4390,{7}); //8 on the ramp
 
 
