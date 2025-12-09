@@ -55,7 +55,7 @@ WebServer server(80);
 // ========== CONTROL CONSTANTS ==========
 const int   PWM_FREQ           = 5000;
 const int   PWM_RESOLUTION     = 8;
-const float GOAL_REACHED_THRESHOLD = 70.0f; // mm radius for BFS nodes
+const float GOAL_REACHED_THRESHOLD = 150.0f; // mm radius for BFS nodes
 
 // ========== MOTOR & ENCODER ==========
 volatile long encoderCount      = 0;
@@ -162,7 +162,8 @@ struct ViveBuffer {
 ViveBuffer initLX, initLY, initRX, initRY;
 bool leftValid  = false;
 bool rightValid = false;
-
+bool viveTargetDead = false;
+bool wasbackward = false;
 float robotX         = 0;
 float robotY         = 0;
 float robotHeading   = 0;
@@ -191,17 +192,18 @@ const unsigned long VIVE_MOVE_PERIOD       = 150;
 class Node {
 public:
   int x, y;
+  bool dead;
   std::vector<int> neighbors;
-  Node() : x(0), y(0) {}
-  Node(int xCoord, int yCoord, std::vector<int> neigh)
-      : x(xCoord), y(yCoord), neighbors(neigh) {}
+
+  Node(int xCoord, int yCoord, std::vector<int> neigh, bool isDead = false)
+      : x(xCoord), y(yCoord), neighbors(neigh), dead(isDead) {}
 };
 
 class Graph {
 public:
   std::vector<Node> nodes;
-  void addNode(int x, int y, std::vector<int> neigh) {
-    nodes.push_back(Node(x, y, neigh));
+  void addNode(int x, int y, std::vector<int> neigh, bool isDead = false) {
+    nodes.push_back(Node(x, y, neigh, isDead));
   }
   std::vector<int> bfs(int start, int goal) {
     int N = nodes.size();
@@ -340,6 +342,35 @@ static inline int pwmFromRPM(float rpm) {
 
 void setMotorPWM(int rpmCmd, int motorSide) {
   int scaled = pwmFromRPM(rpmCmd);
+  if (motorSide == RIGHT_MOTOR) {
+    scaled = -scaled;
+    if (scaled > 0) {
+      ledcWrite(RIGHT_MOTOR_RPWM, scaled);
+      ledcWrite(RIGHT_MOTOR_LPWM, 0);
+    } else if (scaled < 0) {
+      ledcWrite(RIGHT_MOTOR_RPWM, 0);
+      ledcWrite(RIGHT_MOTOR_LPWM, -scaled);
+    } else {
+      ledcWrite(RIGHT_MOTOR_RPWM, 0);
+      ledcWrite(RIGHT_MOTOR_LPWM, 0);
+    }
+    return;
+  }
+  if (scaled > 0) {
+    ledcWrite(MOTOR_RPWM, scaled);
+    ledcWrite(MOTOR_LPWM, 0);
+  } else if (scaled < 0) {
+    ledcWrite(MOTOR_RPWM, 0);
+    ledcWrite(MOTOR_LPWM, -scaled);
+  } else {
+    ledcWrite(MOTOR_RPWM, 0);
+    ledcWrite(MOTOR_LPWM, 0);
+  }
+}
+
+// Direct PWM command without RPM mapping (helper for short pulses)
+void rawSetMotorPWM(int pwm, int motorSide) {
+  int scaled = constrain(pwm, -255, 255);
   if (motorSide == RIGHT_MOTOR) {
     scaled = -scaled;
     if (scaled > 0) {
@@ -684,9 +715,9 @@ bool viveGoToPointStep() {
   float errF = normalizeAngle(desiredForward  - robotHeading);
   float errB = normalizeAngle(desiredBackward - robotHeading);
 
-  bool backward = (fabs(errB) < fabs(errF));
-  float err = backward ? errB : errF;
-  desiredHeading = backward ? desiredBackward : desiredForward;
+  wasbackward = (fabs(errB) < fabs(errF));
+  float err = wasbackward ? errB : errF;
+  desiredHeading = wasbackward ? desiredBackward : desiredForward;
 
   const float DEG2RAD        = (float)M_PI / 180.0f;
   const float TURN_THRESHOLD = 30.0f * DEG2RAD;
@@ -708,7 +739,7 @@ bool viveGoToPointStep() {
   float steerRaw = err * STEER_GAIN;
   float steer    = constrain((int)steerRaw, -STEER_LIMIT, STEER_LIMIT);
 
-  if (backward) {
+  if (wasbackward) {
     speed = -speed;
     steer = steer;
   }
@@ -739,9 +770,25 @@ void followQueueStep() {
   int currentNode = nodeQueue.front();
   viveTargetX = graph.nodes[currentNode].x;
   viveTargetY = graph.nodes[currentNode].y;
+  viveTargetDead = graph.nodes[currentNode].dead;
 
   bool reached = viveGoToPointStep();
   if (reached) {
+    // Dead point: do 2x forward/back pulses before popping
+    if (viveTargetDead) {
+      int hitSpeed = wasbackward ? -120 : 20;
+      
+      for (int k = 0; k < 4; k++) {
+        rawSetMotorPWM( hitSpeed, LEFT_MOTOR);
+        rawSetMotorPWM( hitSpeed, RIGHT_MOTOR);
+        delay(900);
+        rawSetMotorPWM(-hitSpeed, LEFT_MOTOR);
+        rawSetMotorPWM(-hitSpeed, RIGHT_MOTOR);
+        delay(400);
+      }
+      stopMotor();
+    }
+
     int removed = nodeQueue.front();
     nodeQueue.erase(nodeQueue.begin());
     Serial.printf("Reached node %d\n", removed);
@@ -1126,47 +1173,13 @@ void setup() {
   lastVive          = millis();
 
   // Graph nodes (from Code A)
-  graph.addNode(4230,5140,{1,2}); //0
-  graph.addNode(5000,5044,{0,3}); //1
-  graph.addNode(4200,5800,{0,3,4}); //2
-  graph.addNode(5066,5717,{1,2,4}); //3
-  graph.addNode(4570,6192,{2,3,5}); //4
-  graph.addNode(4445,6380,{4}); //5
+    graph.addNode(4150,5200,{1,2}); //0
+  graph.addNode(4900,5224,{0,3}); //1
+  graph.addNode(4180,5980,{0,3,4}); //2
+  graph.addNode(4950,6000,{1,2,4}); //3
+  graph.addNode(4500,6302,{2,3,5}); //4
+  graph.addNode(4500,6380,{4}, true); //5
 
-  // graph.addNode(,,{}); //4
-  // graph.addNode(,,{}); //5
-
-
-
-  // graph.addNode(5100,6330, {1,4,5});          // 0
-  // graph.addNode(4570,6280, {0,4,5});        // 1
-  // graph.addNode(4060,6350, {1,4,5});        // 2
-  // graph.addNode(4060,6350, {});        // 3
-
-  // graph.addNode(4555,5370, {0,1,5});         // 4
-  // graph.addNode(4660,5350, {7});        // 5
-  // graph.addNode(3200,4930, {5,7,8,9});      // 6
-  // graph.addNode(4600,4642, {5});   // 7
-
-//   graph.addNode(3200,4600, {6,7,5,1,2});    // 8
-
-//   graph.addNode(3200,42300, {6,7,5,1,2});    // 9
-
-
-
-
-
-
-
-
-
-//   graph.addNode(5100,4150, {6,12});         // 9
-//   graph.addNode(4000,4150, {7});            // 10
-//   graph.addNode(3050,4200, {4,15});         // 11
-//   graph.addNode(5000,2100, {9,13});         // 12
-//   graph.addNode(4400,2100, {12,14});        // 13
-//   graph.addNode(4000,2000, {13,15});        // 14
-//   graph.addNode(2000,1900, {13,15});        // 15
 }
 
 // ========== LOOP ==========
