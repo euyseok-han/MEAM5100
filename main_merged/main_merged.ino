@@ -188,7 +188,7 @@ const unsigned long IMU_READ_PERIOD   = 50;
 const unsigned long PRINT_PERIOD      = 500;
 
 const unsigned long VIVE_READ_PERIOD       = 18;
-const unsigned long VIVE_MOVE_PERIOD       = 150;
+const unsigned long VIVE_MOVE_PERIOD       = 100;
 
 // ========== GRAPH + BFS (Code A) ==========
 class Node {
@@ -722,7 +722,7 @@ bool viveGoToPointStep() {
 
   const float DEG2RAD        = (float)M_PI / 180.0f;
   const float TURN_THRESHOLD = 30.0f * DEG2RAD;
-  const float TURN_GAIN      = 50.0f;
+  const float TURN_GAIN      = 40.0f;
   const int   TURN_LIMIT     = 60;
 
   if (fabs(err) > TURN_THRESHOLD) {
@@ -733,7 +733,7 @@ bool viveGoToPointStep() {
     return false;
   }
 
-  float speed = 70;
+  float speed = 85;
   speed = constrain((int)speed, 25, 80);
   const float STEER_GAIN  = 5.0f;
   const int   STEER_LIMIT = 30;
@@ -780,12 +780,13 @@ void followQueueStep() {
       for (int k = 0; k < 3; k++) {
         rawSetMotorPWM( hitSpeed, LEFT_MOTOR);
         rawSetMotorPWM( hitSpeed, RIGHT_MOTOR);
-        delay(700);
+        delay(600);
         rawSetMotorPWM(-hitSpeed, LEFT_MOTOR);
         rawSetMotorPWM(-hitSpeed, RIGHT_MOTOR);
         delay(250);
       }
-      stopMotor();
+      rawSetMotorPWM(0, LEFT_MOTOR);
+      rawSetMotorPWM(0, RIGHT_MOTOR);
     }
 
     int removed = nodeQueue.front();
@@ -1165,8 +1166,12 @@ void setup() {
   graph.addNode(4900,5224,{0,3}); //1
   graph.addNode(4180,5980,{0,3,4}); //2
   graph.addNode(4950,6000,{1,2,4}); //3
-  graph.addNode(4500,6302,{2,3,5}); //4
+  graph.addNode(4500,6272,{2,3,5}); //4
   graph.addNode(4500,6380,{4}, true); //5
+  graph.addNode(3860,6500,{4,7}); //6 small neck near tower
+  graph.addNode(3100,4900,{6,8}); //7 point to the ramp(corner)
+  graph.addNode(2950,4390,{7}); //8 on the ramp
+
 
 }
 

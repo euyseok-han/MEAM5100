@@ -321,6 +321,12 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     }
 
     // ================== STATUS UPDATES ==================
+
+    function clearBfsInputs(){
+      document.getElementById("bfsStart").value = "";
+      document.getElementById("bfsGoal").value = "";
+    }
+
     function refreshStatus() {
       fetch('/status')
         .then(r => r.json())
@@ -394,7 +400,9 @@ MODE  : ${data.mode}`;
         .then(t => {
           console.log('Route response:', t);
           refreshStatus();  // Update queue immediately
+          clearBfsInputs();
         });
+        
     }
 
 
@@ -560,8 +568,17 @@ MODE  : ${data.mode}`;
   document.getElementById("bfsStart").addEventListener("keydown", function(e) {
     if (e.key === "Enter") {
         callRoute();
+        clearBfsInputs();
     }
   });
+
+  document.getElementById("bfsGoal").addEventListener("keydown", function(e) {
+    if (e.key === "Enter") {
+        callRoute();
+        clearBfsInputs();
+    }
+});
+
   </script>
 </body>
 </html>
