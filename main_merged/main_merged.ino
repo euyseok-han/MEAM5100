@@ -144,8 +144,8 @@ enum ControlMode {
 ControlMode controlMode = MODE_MANUAL;
 
 // ========== VIVE (Code A) ==========
-#define INIT_SAMPLES 10
-#define MAX_STEP     200
+#define INIT_SAMPLES 20
+#define MAX_STEP     250
 #define ALPHA        0.25f
 
 Vive510 viveLeft(VIVE_LEFT_PIN);
@@ -178,13 +178,16 @@ unsigned long lastControlUpdate = 0;
 unsigned long lastSpeedCalc     = 0;
 unsigned long lastTOFRead       = 0;
 unsigned long lastVive          = 0;
+unsigned long lastViveMove      = 0;
 
 const unsigned long CONTROL_PERIOD    = 50;
 const unsigned long SPEED_CALC_PERIOD = 100;
 const unsigned long TOF_READ_PERIOD   = 50;
 const unsigned long IMU_READ_PERIOD   = 50;
 const unsigned long PRINT_PERIOD      = 500;
-const unsigned long VIVE_PERIOD       = 150;
+
+const unsigned long VIVE_READ_PERIOD       = 30;
+const unsigned long VIVE_MOVE_PERIOD       = 400;
 
 // ========== GRAPH + BFS (Code A) ==========
 class Node {
@@ -229,7 +232,7 @@ public:
 private:
   std::vector<int> reconstructPath(std::vector<int>& parent, int start, int goal) {
     std::vector<int> path;
-    int cur = goal;
+    int cur = goal;s
     while (cur != -1) {
       path.push_back(cur);
       if (cur == start) break;
@@ -680,7 +683,7 @@ bool viveGoToPointStep() {
 
   const float DEG2RAD        = (float)M_PI / 180.0f;
   const float TURN_THRESHOLD = 35.0f * DEG2RAD;
-  const float TURN_GAIN      = 3.0f;
+  const float TURN_GAIN      = 5.0f;
   const int   TURN_LIMIT     = 20;
 
   if (fabs(err) > TURN_THRESHOLD) {
@@ -701,7 +704,7 @@ bool viveGoToPointStep() {
 
   if (backward) {
     speed = -speed;
-    steer = -steer;
+    steer = steer;
   }
   float leftCmd  = speed - steer;
   float rightCmd = speed + steer;
@@ -736,6 +739,8 @@ void followQueueStep() {
     int removed = nodeQueue.front();
     nodeQueue.erase(nodeQueue.begin());
     Serial.printf("Reached node %d\n", removed);
+    viveTargetX = 0;
+    viveTargetY = 0;
     Serial.print("QUEUE: [");
     for (int i = 0; i < (int)nodeQueue.size(); i++) {
       Serial.print(nodeQueue[i]);
@@ -980,6 +985,8 @@ void handleRoute() {
 
 void handleQueueClear() {
   nodeQueue.clear();
+  viveTargetX = 0;
+  viveTargetY = 0;
   stopMotor();
   server.send(200, "text/plain", "Queue cleared");
 }
@@ -1154,20 +1161,22 @@ void loop() {
       break;
 
     case MODE_VIVE:
-      if (millis() - lastVive >= VIVE_PERIOD) {
+      if (millis() - lastVive >= VIVE_READ_PERIOD) {
         readDualVive();
         computeVivePose();
         lastVive = millis();
       }
+      if (millis() - lastViveMove >= VIVE_MOVE_PERIOD) {
       if (!nodeQueue.empty()) {
         followQueueStep();
       } else {
         // Optional single target mode if /gotopoint used alone:
-        if (viveTargetX != 0 || viveTargetY != 0) {
-          viveGoToPointStep();
-        }
+        // if (viveTargetX != 0 || viveTargetY != 0) {
+        //   viveGoToPointStep();
+        // }
       }
-
+      lastViveMove = millis();
+      }
       if (millis() - lastPrint >= PRINT_PERIOD) {
         Serial.print("X,Y = ");
         Serial.print(robotX);
