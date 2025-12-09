@@ -147,7 +147,7 @@ ControlMode controlMode = MODE_MANUAL;
 
 // ========== VIVE (Code A) ==========
 // New robust filter parameters
-const int MAX_JUMP = 400; // reject big teleport leaps (tune 200–600)
+const int MAX_JUMP = 1500; // reject big teleport leaps (tune 200–600)
 
 Vive510 viveLeft(VIVE_LEFT_PIN);
 Vive510 viveRight(VIVE_RIGHT_PIN);
@@ -273,22 +273,45 @@ uint16_t median5(uint16_t a, uint16_t b, uint16_t c, uint16_t d, uint16_t e) {
 }
 uint16_t filterVive(uint16_t raw, ViveBuffer &v) {
 
-  // fill remaining slots until we have 5 samples
-  if (v.count < 5) {
-    v.buf[v.count++] = raw;
-    if (v.count < 5)
-      return raw;   // not enough samples yet → return raw
-  }  
+    static uint16_t lastGood = 0;
 
-  // shift buffer left
-  for (int i = 0; i < 4; i++)
-    v.buf[i] = v.buf[i+1];
+    if (v.count >= 5) {
+        if (abs((int)raw - (int)lastGood) > MAX_JUMP) {
+            raw = lastGood;   // replace spike with last known good
+        }
+    }
+    if (v.count < 5) {
+        v.buf[v.count++] = raw;
 
-  // put new sample
-  v.buf[4] = raw;
+        // When fully collected → compute stable median and init lastGood
+        if (v.count == 5) {
+            uint16_t m = median5(v.buf[0], v.buf[1], v.buf[2], v.buf[3], v.buf[4]);
+            lastGood = m;
+            return m;
+        }
 
-  // return median
-  return median5(v.buf[0], v.buf[1], v.buf[2], v.buf[3], v.buf[4]);
+        // Not enough samples yet → output raw safely
+        lastGood = raw;
+        return raw;
+    }
+
+    // ======================================================
+    // 3. Shift buffer + insert new sample
+    // ======================================================
+    for (int i = 0; i < 4; i++)
+        v.buf[i] = v.buf[i+1];
+
+    v.buf[4] = raw;
+
+    // ======================================================
+    // 4. Median filter
+    // ======================================================
+    uint16_t m = median5(v.buf[0], v.buf[1], v.buf[2], v.buf[3], v.buf[4]);
+
+    // Update lastGood AFTER median smoothing
+    lastGood = m;
+
+    return m;
 }
 
 
@@ -1038,6 +1061,7 @@ void handleRoute() {
 
 void handleQueueClear() {
   nodeQueue.clear();
+  stopMotor();
   server.send(200, "text/plain", "Queue cleared");
 }
 
@@ -1169,15 +1193,15 @@ void setup() {
   lastVive          = millis();
 
   // Graph nodes (from Code A)
-    graph.addNode(4150,5200,{1,2}); //0
-  graph.addNode(4900,5224,{0,3}); //1
-  graph.addNode(4180,5980,{0,3,4}); //2
-  graph.addNode(4950,6000,{1,2,4}); //3
-  graph.addNode(4500,6272,{2,3,5,6}); //4
-  graph.addNode(4500,6380,{4}, true); //5
-  graph.addNode(3860,6500,{4,7}); //6 small neck near tower
+    graph.addNode(4300,5200,{1,2}); //0
+  graph.addNode(5000,5224,{0,3}); //1
+  graph.addNode(4220,4240,{0,3,4}); //2
+  graph.addNode(5000,6000,{1,2,4}); //3
+  graph.addNode(6150,6150,{2,3,5}); //4
+  graph.addNode(6500,6500,{4}, true); //5
+  graph.addNode(6480,6500,{4,7}); //6 small neck near tower
   graph.addNode(4800,4900,{6,8}); //7 point to the ramp(corner)
-  graph.addNode(2950,4390,{7}); //8 on the ramp
+  graph.addNode(4700,4700,{7}); //8 on the ramp
 
 
 }
@@ -1211,14 +1235,12 @@ void loop() {
         lastVive = millis();
       }
       if (millis() - lastViveMove >= VIVE_MOVE_PERIOD) {
-      if (!nodeQueue.empty()) {
         followQueueStep();
-      } else {
         // Optional single target mode if /gotopoint used alone:
         // if (viveTargetX != 0 || viveTargetY != 0) {
         //   viveGoToPointStep();
         // }
-      }
+      
       lastViveMove = millis();
       }
       if (millis() - lastPrint >= PRINT_PERIOD) {
