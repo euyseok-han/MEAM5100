@@ -117,6 +117,7 @@ float wallFollowSpeed     = 40;
 float lastDistError       = 0;
 float wallFollowKp        = 1.5;
 float wallFollowKd        = 0.8;
+float wallAngleKp         = 0.1;
 unsigned long lastWallFollowUpdate = 0;
 
 enum RobotState {
@@ -516,11 +517,14 @@ void wallFollowPD() {
   float deri      = (dt > 0) ? (distError - lastDistError) / dt : 0;
   lastDistError   = distError;
 
-  float steer = wallFollowKp * distError + wallFollowKd * deri;
+  float angleRight = rightDistance1 - rightDistance2;
+
+  // float steer = wallFollowKp * distError + wallFollowKd * deri;
+  float steer = wallFollowKp * distError - wallAngleKp * angleRight;
   steer = constrain(steer, -60, 60);
 
-  targetSpeed      = wallFollowSpeed - steer;
-  rightTargetSpeed = wallFollowSpeed + steer;
+  targetSpeed      = wallFollowSpeed + steer;
+  rightTargetSpeed = wallFollowSpeed - steer;
 }
 
 // ========== WALL STATE MACHINE ==========
@@ -1145,12 +1149,13 @@ void loop() {
       break;
 
     case MODE_WALL:
-      if (wallFollowMode) {
-        updateStateMachine();
-      } else {
-        stopMotor();
-        currentState = STATE_IDLE;
-      }
+      // if (wallFollowMode) {
+      //   updateStateMachine();
+      // } else {
+      //   stopMotor();
+      //   currentState = STATE_IDLE;
+      // }
+      wallFollowPD();
       break;
 
     case MODE_VIVE:
