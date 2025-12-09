@@ -5,6 +5,8 @@
  * - MODE_VIVE:   Vive-based BFS route following
  */
 
+// ToDo: remove stopmotor() between vive points
+
 #include <WiFi.h>
 #include <WebServer.h>
 #include <Wire.h>

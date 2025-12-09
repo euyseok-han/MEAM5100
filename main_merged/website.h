@@ -6,7 +6,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html>
 <head>
-  <title>MEAM5100 Robot Control</title>
+  <title>RoBa</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     body { 
@@ -109,8 +109,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 </head>
 <body>
   <div class="container">
-    <h1>MEAM5100 Robot Control</h1>
-    <h3>Manual Drive · PID Tuning · BFS Route Queue</h3>
+    <h1>ROBA</h1>
 
     <!-- MODE SELECTION PANEL -->
     <div class="panel mode-section" style="margin-bottom:15px; text-align:left;">
@@ -136,12 +135,6 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       </div>
     </div>
 
-    <div id="gamepadStatus"
-        style="text-align:center; padding:10px; margin-bottom:15px; 
-               border-radius:5px; background-color:#ffebee; color:#c62828; font-weight:bold;">
-      Xbox Controller: Disconnected
-    </div>
-
     <div class="layout-grid">
       
       <!-- CONTROL PANEL -->
@@ -149,12 +142,13 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <h3>Speed Control <span id="direction" class="direction-indicator stopped">STOPPED</span></h3>
 
         <label>Base Speed: <span id="speedValue" class="speed-value">0</span> RPM</label>
-        <input type="range" id="speedSlider" min="-120" max="120" value="0" step="5" oninput="updateControl()">
+        <input type="range" id="speedSlider" min="-120" max="120" value="0" step="5" oninput="updateControlLocal()">
 
         <label>Steering: <span id="steeringValue" class="speed-value">0</span></label>
-        <input type="range" id="steeringSlider" min="-60" max="60" value="0" step="5" oninput="updateControl()">
+        <input type="range" id="steeringSlider" min="-60" max="60" value="0" step="5" oninput="updateControlLocal()">
 
         <button class="stop-btn" onclick="stopMotor()">STOP</button>
+        <button onclick="submitControl()" style="background:#008CFF;">Apply</button>
       </div>
 
       <!-- PID TUNING -->
@@ -256,7 +250,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     }
 
     // ================== MANUAL CONTROL ==================
-    function updateControl() {
+    function updateControlLocal() {
       currentSpeed = parseInt(document.getElementById('speedSlider').value);
       currentSteering = parseInt(document.getElementById('steeringSlider').value);
 
@@ -264,9 +258,12 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       document.getElementById('steeringValue').textContent = currentSteering;
 
       updateDirectionIndicator(currentSpeed, currentSteering);
-
-      fetch('/setspeed?speed=' + currentSpeed + '&steering=' + currentSteering);
     }
+    function submitControl() {
+      fetch('/setspeed?speed=' + currentSpeed + '&steering=' + currentSteering)
+        .then(() => console.log("Control submitted:", currentSpeed, currentSteering));
+    }
+
 
     function setControl(speed, steering) {
       currentSpeed = Math.round(speed);
@@ -409,7 +406,7 @@ MODE  : ${data.mode}`;
         el.textContent = '(empty)';
         return;
       }
-      el.textContent = '[ ' + queueArr.join(' → ') + ' ]';
+      el.textContent = '[ ' + queueArr.join(' - ') + ' ]';
     }
 
     // ================== QUEUE CONTROL ACTIONS ==================
@@ -548,6 +545,11 @@ MODE  : ${data.mode}`;
         stopMotor();
         handled = true;
       }
+        
+      if (e.code === "Space") {
+        submitControl();
+        handled = true;
+      }
 
       if (handled) {
         e.preventDefault();
@@ -555,6 +557,11 @@ MODE  : ${data.mode}`;
       }
     });
 
+  document.getElementById("bfsStart").addEventListener("keydown", function(e) {
+    if (e.key === "Enter") {
+        callRoute();
+    }
+  });
   </script>
 </body>
 </html>
