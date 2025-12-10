@@ -15,6 +15,7 @@
 #include <Adafruit_Sensor.h>
 #include <vector>
 #include <queue>
+#include <deque>
 #include <algorithm>
 #include <math.h>
 
@@ -170,7 +171,6 @@ float desiredHeading = 0;
 
 int viveTargetX      = 0;
 int viveTargetY      = 0;
-int viveDirectionMode = 0; // kept for compatibility
 
 unsigned long lastControlUpdate = 0;
 unsigned long lastSpeedCalc     = 0;
@@ -244,6 +244,15 @@ private:
 Graph graph;
 std::vector<int> nodeQueue;
 bool queuePaused = false;
+
+// ========== XY GOTO QUEUE ==========
+struct XYTarget {
+  int x;
+  int y;
+  bool isDead;
+};
+
+std::deque<XYTarget> xyQueue; // FIFO queue for coordinate targets
 
 // ========== UTILS ==========
 float normalizeAngle(float a) {
@@ -802,21 +811,20 @@ void followQueueStep() {
     stopMotor();
     return;
   }
-  if (!coordViveMode && queuePaused) {
+  if (queuePaused) {
     stopMotor();
     return;
   }
-  if (!coordViveMode && nodeQueue.empty()) {
+  if ( nodeQueue.empty()) {
     stopMotor();
     return;
   }
 
-  if (!coordViveMode){
   int currentNode = nodeQueue.front();
   viveTargetX = graph.nodes[currentNode].x;
   viveTargetY = graph.nodes[currentNode].y;
   viveTargetDead = graph.nodes[currentNode].dead;
-  }
+
   bool reached = viveGoToPointStep();
   if (reached) {
     if (viveTargetDead) {
@@ -836,11 +844,31 @@ void followQueueStep() {
       rawSetMotorPWM(0, LEFT_MOTOR);
       rawSetMotorPWM(0, RIGHT_MOTOR);
     }
-
-    if (!coordViveMode){
     int removed = nodeQueue.front();
     nodeQueue.erase(nodeQueue.begin());
-    }
+  }
+}
+
+// Process coordinate-based XY queue (FIFO)
+void followXYQueueStep() {
+  if (!vivePoseValid()) {
+    stopMotor();
+    return;
+  }
+  if (xyQueue.empty()) {
+    stopMotor();
+    return;
+  }
+
+  XYTarget &t = xyQueue.front();
+  viveTargetX = t.x;
+  viveTargetY = t.y;
+  viveTargetDead = t.isDead;
+
+  bool reached = viveGoToPointStep();
+  if (reached) {
+    xyQueue.pop_front();
+
   }
 }
 
@@ -1012,16 +1040,23 @@ void handleMode() {
 
 void handleGoToPoint() {
   commandCount++;
-  if (server.hasArg("x") && server.hasArg("y")) {
-    viveTargetX = server.arg("x").toInt();
-    viveTargetY = server.arg("y").toInt();
-    viveTargetDead = server.arg("dead") == "1" || server.arg("dead") == "true";
-    coordViveMode = true;
-    controlMode = MODE_VIVE;
-    server.send(200, "text/plain", "Moving");
-  } else {
+  if (!server.hasArg("x") || !server.hasArg("y")) {
     server.send(400, "text/plain", "Missing x or y");
+    return;
   }
+
+  int x = server.arg("x").toInt();
+  int y = server.arg("y").toInt();
+  bool isDead = server.arg("dead") == "1" || server.arg("dead") == "true";
+
+  // Push into XY queue (FIFO)
+  xyQueue.push_back({x, y, isDead});
+
+  // Ensure VIVE mode processes queue
+  controlMode = MODE_VIVE;
+  coordViveMode = true; // using coordinate navigation
+
+  server.send(200, "text/plain", "GoToPoint added to queue.");
 }
 
 // BFS route API: /route?goal=Y[&start=X]
@@ -1081,7 +1116,6 @@ void handleRoute() {
 
   controlMode = MODE_VIVE;
   coordViveMode = false;
-  viveDirectionMode = 0;
 
   String s = "[";
   for (size_t i = 0; i < nodeQueue.size(); ++i) {
@@ -1122,6 +1156,58 @@ void handleQueuePause() {
   queuePaused = enable;
   server.send(200, "text/plain", enable ? "QUEUE PAUSED" : "QUEUE RESUMED");
 }
+void printViveState() {
+    unsigned long now = millis();
+    if (now - lastPrint < PRINT_PERIOD) return;
+    lastPrint = now;
+
+    // ----- POSE -----
+    printf("POSE X,Y = %.1f, %.1f\n", robotX, robotY);
+
+    // ----- Heading -----
+    printf("Heading: %.4f\n", robotHeading);
+
+    // ----- Desired Heading -----
+    printf("Desired: %.4f\n", desiredHeading);
+
+    // ===============================
+    // NODE QUEUE (BFS)
+    // ===============================
+    if (!coordViveMode) {
+        printf("QUEUE: [");
+
+        for (int i = 0; i < (int)nodeQueue.size(); i++) {
+            if (i < (int)nodeQueue.size() - 1)
+                printf("%d,", nodeQueue[i]);
+            else
+                printf("%d", nodeQueue[i]);
+        }
+
+        printf("]\n");
+    }
+
+    // ===============================
+    // XY QUEUE (Go-To-Point)
+    // ===============================
+    else {
+        printf("XYQ: [");
+
+        for (int i = 0; i < (int)xyQueue.size(); i++) {
+            printf("(%d,%d,%c)", 
+                  xyQueue[i].x,
+                  xyQueue[i].y,
+                  xyQueue[i].isDead ? 'D' : 'N');
+
+            if (i < (int)xyQueue.size() - 1)
+                printf(" - ");
+        }
+
+        printf("]\n");
+    }
+
+}
+
+
 
 // ========== SETUP ==========
 void setup() {
@@ -1286,27 +1372,14 @@ void loop() {
         lastVive = millis();
       }
       if (millis() - lastViveMove >= VIVE_MOVE_PERIOD) {
-        followQueueStep();
+        if (coordViveMode)
+          followXYQueueStep();
+        else
+          followQueueStep();
       
       lastViveMove = millis();
       }
-      if (millis() - lastPrint >= PRINT_PERIOD) {
-        Serial.print("X,Y = ");
-        Serial.print(robotX);
-        Serial.print(", ");
-        Serial.println(robotY);
-        Serial.print("Heading: ");
-        Serial.println(robotHeading);
-        Serial.print("Desired: ");
-        Serial.println(desiredHeading);
-        Serial.print("QUEUE: [");
-        for (int i = 0; i < (int)nodeQueue.size(); i++) {
-          Serial.print(nodeQueue[i]);
-          if (i < (int)nodeQueue.size() - 1) Serial.print(",");
-        }
-        Serial.println("]");
-        lastPrint = millis();
-      }
+      printViveState();
       break;
   }
 
