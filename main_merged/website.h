@@ -267,7 +267,32 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
             <button onclick="queueClear()" class="queue-btn stop-btn">Clear Queue</button>
           </div>
 
+            </div>
+            <div class="goto-panel" style="
+            margin-top:18px;
+            background:#eefaff;
+            padding:12px;
+            border-radius:6px;
+            border:1px solid #cce7ff;
+      ">
+        <h4>Go To Coordinate (Vive)</h4>
+
+        <div class="bfs-input-row" style="margin-top:6px;">
+          <span>X:</span>
+          <input type="number" id="gotoX" placeholder="x" style="width:80px;">
+
+          <span>Y:</span>
+          <input type="number" id="gotoY" placeholder="y" style="width:80px;">
+
+          <label style="margin-left:10px;">
+            <input type="checkbox" id="gotoDead"> Dead(point with a Tower/Nexus)
+          </label>
+
+          <button onclick="sendGoToPoint()" class="queue-btn" style="width:auto;padding:6px 14px;background:#007bff;">
+            Go
+          </button>
         </div>
+      </div>
       </div>
 
     </div>
@@ -441,7 +466,9 @@ MODE  : ${data.mode}`;
         .then(t => {
           refreshStatus();  // Update queue immediately
           clearBfsInputs();
-        });
+          return fetch('/mode?m=vive');
+        })
+        .then(() => refreshStatus());
     }
 
     // ================== QUEUE DISPLAY ==================
@@ -488,7 +515,31 @@ MODE  : ${data.mode}`;
     function queueSkip() {
       fetch('/queue/skip').then(() => refreshStatus());
     }
+    function sendGoToPoint() {
+      const x = document.getElementById("gotoX").value;
+      const y = document.getElementById("gotoY").value;
+      const dead = document.getElementById("gotoDead").checked ? 1 : 0;
 
+      if (x === "" || y === "") {
+        console.log("Missing coordinate");
+        return;
+      }
+
+      const url = `/gotopoint?x=${x}&y=${y}&dead=${dead}`;
+
+      fetch(url)
+        .then(r => r.text())
+        .then(t => {
+          console.log("GoTo response:", t);
+
+          document.getElementById("gotoX").value = "";
+          document.getElementById("gotoY").value = "";
+          document.getElementById("gotoDead").checked = false;
+        });
+
+      // Switch mode to VIVE automatically
+      fetch('/mode?m=vive');
+    }
     function enableWall(en) {
       fetch('/wall/enable?enable=' + en)
         .then(r => r.text())
