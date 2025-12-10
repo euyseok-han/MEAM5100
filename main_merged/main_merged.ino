@@ -763,7 +763,7 @@ bool viveGoToPointStep() {
   const float TURN_GAIN      = viveTargetDead ? 20.0f : 35.0f;
   const int   TURN_LIMIT     = viveTargetDead ? 20 : 60;
 
-  bool alignNeeded = fabs(err) > TURN_THRESHOLD
+  bool alignNeeded = fabs(err) > TURN_THRESHOLD;
   if (alignNeeded) {
     float turnRaw = err * TURN_GAIN;
     float turn    = constrain((int)turnRaw, -TURN_LIMIT, TURN_LIMIT);
