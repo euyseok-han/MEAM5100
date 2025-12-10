@@ -439,7 +439,6 @@ MODE  : ${data.mode}`;
       fetch(url)
         .then(r => r.text())
         .then(t => {
-          console.log('Route response:', t);
           refreshStatus();  // Update queue immediately
           clearBfsInputs();
         });
@@ -494,7 +493,6 @@ MODE  : ${data.mode}`;
       fetch('/wall/enable?enable=' + en)
         .then(r => r.text())
         .then(t => {
-          console.log("Wall mode:", t);
           refreshStatus();
         });
     }
@@ -507,7 +505,6 @@ MODE  : ${data.mode}`;
       const url = `/wall/goals?frontGoal=${f}&rightGoal1=${r1}&rightGoal2=${r2}`;
 
       fetch(url).then(r => r.text()).then(t => {
-        console.log("Wall goals:", t);
         refreshStatus();
       });
     }
@@ -519,7 +516,6 @@ MODE  : ${data.mode}`;
       fetch(`/wall/pd?kp=${kp}&kd=${kd}`)
         .then(r => r.text())
         .then(t => {
-          console.log("Wall PD:", t);
           refreshStatus();
         });
     }
