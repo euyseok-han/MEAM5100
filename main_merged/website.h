@@ -105,26 +105,67 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       font-family: monospace;
       font-size: 14px;
     }
+
+    /* === COMBINED QUEUE PANEL (Option C) === */
+    .combined-queue {
+      background: #fff7e6;
+    }
+
+    .queue-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 10px;
+    }
+
+    .queue-list, .queue-buttons {
+      background: #ffffff;
+      border-radius: 6px;
+      padding: 12px;
+      border: 1px solid #ddd;
+    }
+
+    .queue-box {
+      margin-top: 6px;
+      padding: 6px;
+      background: #fafafa;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 14px;
+      max-height: 120px;
+      overflow-y: auto;
+    }
+
+    .queue-btn {
+      display: block;
+      width: 100%;
+      padding: 10px;
+      margin-top: 8px;
+      border-radius: 5px;
+      border: none;
+      cursor: pointer;
+      background: #4CAF50;
+      color: white;
+      font-size: 15px;
+    }
+    .queue-btn.stop-btn {
+      background: #f44336;
+    }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>ROBA</h1>
-
     <!-- MODE SELECTION PANEL -->
     <div class="panel mode-section" style="margin-bottom:15px; text-align:left;">
-      <h3>Mode Selection</h3>
-
       <label>
         <input type="radio" name="mode" value="manual" onclick="setMode('manual')">
         Manual Control
       </label>
-      <br>
       <label>
         <input type="radio" name="mode" value="vive" onclick="setMode('vive')">
         BFS (Vive Navigation)
       </label>
-      <br>
       <label>
         <input type="radio" name="mode" value="wall" onclick="setMode('wall')">
         Wall Follow (disabled)
@@ -148,15 +189,15 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <input type="range" id="steeringSlider" min="-60" max="60" value="0" step="5" oninput="updateControlLocal()">
 
         <button class="stop-btn" onclick="stopMotor()">STOP</button>
-        <button onclick="submitControl()" style="background:#008CFF;">Apply</button>
+        <button onclick="setControl(currentSpeed, currentSteering)" style="background:#008CFF;">Apply</button>
       </div>
 
       <!-- PID TUNING -->
       <div class="panel pid-section">
         <h3>PID Tuning</h3>
 
-        <label>Kp:</label><input id="kp" type="number" value="0.3" step="0.1" onchange="updatePID()"><br><br>
-        <label>Ki:</label><input id="ki" type="number" value="1.5" step="0.1" onchange="updatePID()"><br><br>
+        <label>Kp:</label><input id="kp" type="number" value="0.4" step="0.1" onchange="updatePID()"><br><br>
+        <label>Ki:</label><input id="ki" type="number" value="0.01" step="0.01" onchange="updatePID()"><br><br>
         <label>Kd:</label><input id="kd" type="number" value="0" step="0.01" onchange="updatePID()">
       </div>
 
@@ -171,10 +212,9 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <h3>BFS Route Planner</h3>
         <div class="bfs-input-row">
           <span>Start Node (optional):</span>
-          <input type="number" id="bfsStart" min="0" max="15" step="1" placeholder="">  
-          <span>Goal Node Index:</span>
-          <input type="number" id="bfsGoal" min="0" max="15" step="1" value="0">
-          
+          <input type="number" id="bfsStart" min="0" max="40" step="1" placeholder="">  
+          <span>Goal Node:</span>
+          <input type="number" id="bfsGoal" min="0" max="40" step="1" placeholder="">
           <button onclick="callRoute()">Add Route</button>
         </div>
       </div>
@@ -208,20 +248,26 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <button onclick="updateWallPD()">Update PD</button>
       </div>
 
-      <!-- CURRENT ROUTE QUEUE DISPLAY -->
-      <div class="panel" style="background:#fff7e6;">
-        <h3>Route Queue</h3>
-        <div id="queueDisplay" style="font-size:16px; font-weight:bold;">
-            (empty)
-        </div>
-      </div>
+      <div class="panel combined-queue">
+        <h3>Route Queue & Controls</h3>
 
-      <!-- QUEUE CONTROLS -->
-      <div class="panel" style="background:#eef7ff;">
-        <h3>Queue Controls</h3>
-        <button id="pauseBtn" onclick="toggleQueuePause()">Pause</button>
-        <button onclick="queueSkip()" style="background:#ff9800;">Skip Node</button>
-        <button onclick="queueClear()" class="stop-btn">Clear Queue</button>
+        <div class="queue-grid">
+
+          <!-- Left side: Queue List -->
+          <div class="queue-list">
+            <h4>Queue</h4>
+            <div id="queueDisplay" class="queue-box">(empty)</div>
+          </div>
+
+          <!-- Right side: Buttons -->
+          <div class="queue-buttons">
+            <h4>Actions</h4>
+            <button id="pauseBtn" onclick="toggleQueuePause()" class="queue-btn">Pause</button>
+            <button onclick="queueSkip()" class="queue-btn" style="background:#ff9800;">Skip Node</button>
+            <button onclick="queueClear()" class="queue-btn stop-btn">Clear Queue</button>
+          </div>
+
+        </div>
       </div>
 
     </div>
@@ -250,25 +296,19 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     }
 
     // ================== MANUAL CONTROL ==================
+    // Slider moves: only update UI + local state (no server call)
     function updateControlLocal() {
       currentSpeed = parseInt(document.getElementById('speedSlider').value);
       currentSteering = parseInt(document.getElementById('steeringSlider').value);
-
       document.getElementById('speedValue').textContent = currentSpeed;
       document.getElementById('steeringValue').textContent = currentSteering;
-
       updateDirectionIndicator(currentSpeed, currentSteering);
     }
-    function submitControl() {
-      fetch('/setspeed?speed=' + currentSpeed + '&steering=' + currentSteering)
-        .then(() => console.log("Control submitted:", currentSpeed, currentSteering));
-    }
 
-
+    // Single function that updates UI + sends command to /setspeed
     function setControl(speed, steering) {
       currentSpeed = Math.round(speed);
       currentSteering = Math.round(steering);
-
       document.getElementById('speedSlider').value = currentSpeed;
       document.getElementById('steeringSlider').value = currentSteering;
       document.getElementById('speedValue').textContent = currentSpeed;
@@ -276,7 +316,8 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
       updateDirectionIndicator(currentSpeed, currentSteering);
 
-      fetch('/setspeed?speed=' + currentSpeed + '&steering=' + currentSteering);
+      fetch('/setspeed?speed=' + currentSpeed + '&steering=' + currentSteering)
+        .then(() => console.log("Control submitted:", currentSpeed, currentSteering));
     }
 
     function stopMotor() {
@@ -402,9 +443,7 @@ MODE  : ${data.mode}`;
           refreshStatus();  // Update queue immediately
           clearBfsInputs();
         });
-        
     }
-
 
     // ================== QUEUE DISPLAY ==================
     function updateQueueUI(queueArr) {
@@ -451,7 +490,6 @@ MODE  : ${data.mode}`;
       fetch('/queue/skip').then(() => refreshStatus());
     }
 
-    // ================== WALL-FOLLOW FUNCTIONS ==================
     function enableWall(en) {
       fetch('/wall/enable?enable=' + en)
         .then(r => r.text())
@@ -485,99 +523,48 @@ MODE  : ${data.mode}`;
           refreshStatus();
         });
     }
-
-    // ================== GAMEPAD SUPPORT ==================
-    let gamepadConnected = false;
-    let gamepadIndex = null;
-
-    function applyDeadzone(v) {
-      return Math.abs(v) < 0.15 ? 0 : v;
-    }
-
-    window.addEventListener("gamepadconnected", (e) => {
-      gamepadConnected = true;
-      gamepadIndex = e.gamepad.index;
-      const s = document.getElementById('gamepadStatus');
-      s.textContent = 'Xbox Controller: Connected';
-      s.style.backgroundColor = '#e8f5e9';
-      s.style.color = '#2e7d32';
-    });
-
-    window.addEventListener("gamepaddisconnected", () => {
-      gamepadConnected = false;
-      gamepadIndex = null;
-      const s = document.getElementById('gamepadStatus');
-      s.textContent = 'Xbox Controller: Disconnected';
-      s.style.backgroundColor = '#ffebee';
-      s.style.color = '#c62828';
-      stopMotor();
-    });
-
-    function pollGamepad() {
-      if (!gamepadConnected) return;
-
-      const gp = navigator.getGamepads()[gamepadIndex];
-      if (!gp) return;
-
-      const rt = gp.buttons[7]?.value || 0;
-      const lt = gp.buttons[6]?.value || 0;
-      const speed = (rt - lt) * 120;
-
-      const steer = applyDeadzone(gp.axes[0]) * 60;
-
-      setControl(speed, steer);
-    }
-
-    // ================== KEYBOARD CONTROL ==================
     document.addEventListener('keydown', (e) => {
-      let handled = false;
-
       if (e.key === 'ArrowUp') {
         currentSpeed = Math.min(120, currentSpeed + 10);
-        handled = true;
       }
       if (e.key === 'ArrowDown') {
         currentSpeed = Math.max(-120, currentSpeed - 10);
-        handled = true;
       }
       if (e.key === 'ArrowLeft') {
         currentSteering = Math.max(-60, currentSteering - 5);
-        handled = true;
       }
       if (e.key === 'ArrowRight') {
         currentSteering = Math.min(60, currentSteering + 5);
-        handled = true;
       }
 
       if (e.key === 's' || e.key === 'S') {
         stopMotor();
-        handled = true;
+        return;
       }
         
       if (e.code === "Space") {
-        submitControl();
-        handled = true;
-      }
-
-      if (handled) {
-        e.preventDefault();
         setControl(currentSpeed, currentSteering);
+        return;
+      }
+      document.getElementById('speedSlider').value = currentSpeed;
+      document.getElementById('steeringSlider').value = currentSteering;
+      updateControlLocal();
+    });
+
+    // Enter on BFS inputs = "Add Route"
+    document.getElementById("bfsStart").addEventListener("keydown", function(e) {
+      if (e.key === "Enter") {
+        callRoute();
+        clearBfsInputs();
       }
     });
 
-  document.getElementById("bfsStart").addEventListener("keydown", function(e) {
-    if (e.key === "Enter") {
+    document.getElementById("bfsGoal").addEventListener("keydown", function(e) {
+      if (e.key === "Enter") {
         callRoute();
         clearBfsInputs();
-    }
-  });
-
-  document.getElementById("bfsGoal").addEventListener("keydown", function(e) {
-    if (e.key === "Enter") {
-        callRoute();
-        clearBfsInputs();
-    }
-});
+      }
+    });
 
   </script>
 </body>

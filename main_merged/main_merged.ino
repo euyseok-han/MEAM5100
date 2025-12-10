@@ -137,17 +137,12 @@ float      targetTurnAngle        = 0;
 unsigned long stateStartTime      = 0;
 unsigned long lastPrint           = 0;
 
-// ========== CONTROL MODES ==========
 enum ControlMode {
   MODE_MANUAL = 0,
   MODE_WALL   = 1,
   MODE_VIVE   = 2
 };
 ControlMode controlMode = MODE_MANUAL;
-
-// ========== VIVE (Code A) ==========
-// New robust filter parameters
-const int MAX_JUMP = 1500; // reject big teleport leaps (tune 200–600)
 
 Vive510 viveLeft(VIVE_LEFT_PIN);
 Vive510 viveRight(VIVE_RIGHT_PIN);
@@ -181,15 +176,14 @@ unsigned long lastTOFRead       = 0;
 unsigned long lastVive          = 0;
 unsigned long lastViveMove      = 0;
 
-const unsigned long CONTROL_PERIOD    = 50;
-const unsigned long SPEED_CALC_PERIOD = 100;
+const unsigned long CONTROL_PERIOD    = 60;
+const unsigned long SPEED_CALC_PERIOD = 50;
 const unsigned long TOF_READ_PERIOD   = 50;
 const unsigned long IMU_READ_PERIOD   = 50;
-const unsigned long PRINT_PERIOD      = 500;
-
-const unsigned long VIVE_READ_PERIOD       = 15;
-const unsigned long VIVE_MOVE_PERIOD       = 150;
-
+const unsigned long PRINT_PERIOD      = 1000;
+const unsigned long VIVE_READ_PERIOD       = 80;
+const unsigned long VIVE_MOVE_PERIOD       = 160;
+bool coordViveMode = false;
 // ========== GRAPH + BFS (Code A) ==========
 class Node {
 public:
@@ -423,8 +417,7 @@ float calculatePID(PIDController &pid, float target, float current, float dt) {
 }
 
 void updateMotorControl() {
-  unsigned long now = millis();
-  float dt = (now - lastControlUpdate) / 1000.0f;
+  float dt = (millis() - lastControlUpdate) / 1000.0f;
   if (dt <= 0) dt = CONTROL_PERIOD / 1000.0f;
 
   float leftOut  = calculatePID(leftPID,  targetSpeed,      currentSpeed,      dt);
@@ -779,7 +772,6 @@ bool viveGoToPointStep(bool isDead=false) {
   return false;
 }
 
-// ========== BFS QUEUE FOLLOW ==========
 void followQueueStep() {
   if (!vivePoseValid()) {
     stopMotor();
@@ -794,11 +786,12 @@ void followQueueStep() {
     return;
   }
 
+  if (!coordViveMode){
   int currentNode = nodeQueue.front();
   viveTargetX = graph.nodes[currentNode].x;
   viveTargetY = graph.nodes[currentNode].y;
   viveTargetDead = graph.nodes[currentNode].dead;
-
+  }
   bool reached = viveGoToPointStep(viveTargetDead);
   if (reached) {
     if (viveTargetDead) {
@@ -1213,6 +1206,11 @@ void loop() {
 
   switch (controlMode) {
     case MODE_MANUAL:
+    if (millis() - lastPrint >= PRINT_PERIOD) {
+        Serial.printf("Control - target left: %.1f, terget right: %.1f -> Left: %.1f, Right: %.1f\n",
+                  targetSpeed, rightTargetSpeed, currentSpeed, rightCurrentSpeed);
+        lastPrint = millis();
+      }
       robotX = 0;
       robotY = 0;
       break;
