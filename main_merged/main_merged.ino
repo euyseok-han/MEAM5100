@@ -152,7 +152,7 @@ uint16_t lx0, ly0, lx1, ly1, lx2, ly2;
 uint16_t rx0, ry0, rx1, ry1, rx2, ry2;
 
 struct ViveBuffer {
-  uint16_t buf[10];
+  uint16_t buf[7];
   int count = 0;
 };
 
@@ -252,10 +252,10 @@ float normalizeAngle(float a) {
 
 }
 
-uint16_t median10(uint16_t a, uint16_t b, uint16_t c, uint16_t d, uint16_t e, uint16_t f, uint16_t g, uint16_t h, uint16_t i, uint16_t j) {
-  uint16_t arr[10] = {a, b, c, d, e, f, g, h, i, j};
-  for (int i = 0; i < 9; i++) {
-    for (int j = i + 1; j < 10; j++) {
+uint16_t median7(uint16_t a, uint16_t b, uint16_t c, uint16_t d, uint16_t e, uint16_t f, uint16_t g) {
+  uint16_t arr[7] = {a, b, c, d, e, f, g};
+  for (int i = 0; i < 6; i++) {
+    for (int j = i + 1; j < 7; j++) {
       if (arr[j] < arr[i]) {
         uint16_t t = arr[i];
         arr[i] = arr[j];
@@ -263,24 +263,24 @@ uint16_t median10(uint16_t a, uint16_t b, uint16_t c, uint16_t d, uint16_t e, ui
       }
     }
   }
-  return arr[4];
+  return arr[3];
 }
 uint16_t filterVive(uint16_t raw, ViveBuffer &v) {
 
     
-    if (v.count < 10) {
+    if (v.count < 7) {
         v.buf[v.count++] = raw;
 
-        if (v.count == 10) {
-            uint16_t m = median10(v.buf[0], v.buf[1], v.buf[2], v.buf[3], v.buf[4], v.buf[5], v.buf[6], v.buf[7], v.buf[8], v.buf[9]);
+        if (v.count == 7) {
+            uint16_t m = median7(v.buf[0], v.buf[1], v.buf[2], v.buf[3], v.buf[4], v.buf[5], v.buf[6]);
             return m;
         }
         return raw;
     }
-    for (int i = 0; i < 9; i++)
+    for (int i = 0; i < 6; i++)
         v.buf[i] = v.buf[i+1];
-    v.buf[9] = raw;
-    uint16_t m = median10(v.buf[0], v.buf[1], v.buf[2], v.buf[3], v.buf[4], v.buf[5], v.buf[6], v.buf[7], v.buf[8], v.buf[9]);
+    v.buf[6] = raw;
+    uint16_t m = median7(v.buf[0], v.buf[1], v.buf[2], v.buf[3], v.buf[4], v.buf[5], v.buf[6]);
 
     return m;
 }
@@ -703,7 +703,7 @@ void computeVivePose() {
   }
 }
 
-bool viveGoToPointStep(bool isDead=false) {
+bool viveGoToPointStep() {
   if (!leftValid || !rightValid) {
     stopMotor();
     return false;
@@ -717,7 +717,7 @@ bool viveGoToPointStep(bool isDead=false) {
   float dy = (float)viveTargetY - robotY;
   float dist = sqrtf(dx * dx + dy * dy);
 
-  if (!isDead){
+  if (!viveTargetDead){
     if (dist < GOAL_REACHED_THRESHOLD) {
       stopMotor();
       return true;
@@ -734,11 +734,12 @@ bool viveGoToPointStep(bool isDead=false) {
   desiredHeading = wasBackward ? desiredBackward : desiredForward;
 
   const float DEG2RAD        = (float)M_PI / 180.0f;
-  const float TURN_THRESHOLD = 30.0f * DEG2RAD;
-  const float TURN_GAIN      = 25.0f;
-  const int   TURN_LIMIT     = 60;
+  const float TURN_THRESHOLD = viveTargetDead ? (15.0f * DEG2RAD) : (40.0f * DEG2RAD);
+  const float TURN_GAIN      = viveTargetDead ? 20.0f : 35.0f;
+  const int   TURN_LIMIT     = viveTargetDead ? 20 : 60;
 
-  if (fabs(err) > TURN_THRESHOLD) {
+  bool alignNeeded = fabs(err) > TURN_THRESHOLD
+  if (alignNeeded) {
     float turnRaw = err * TURN_GAIN;
     float turn    = constrain((int)turnRaw, -TURN_LIMIT, TURN_LIMIT);
     targetSpeed      = -turn;
@@ -746,15 +747,14 @@ bool viveGoToPointStep(bool isDead=false) {
     return false;
   }
   
-  else if (isDead) {
+  if (viveTargetDead) {
     stopMotor();
     return true;
   }
-  
-
-  float bfsSpeed = 70;
-  bfsSpeed = constrain((int)bfsSpeed, 25, 80);
-  const float STEER_GAIN  = 10.0f;
+  const float SPEED_GAIN = 25.0f;
+  float bfsSpeed = dist / SPEED_GAIN; // if dist is like 500, it like 25. If 2000, should be 80
+  bfsSpeed = constrain((int)bfsSpeed, 25, 100);
+  const float STEER_GAIN  = 10.0f; // if err is like 30deg(0.5rad), steer is like 5
   const int   STEER_LIMIT = 30;
   float steerRaw = err * STEER_GAIN;
   float steer    = constrain((int)steerRaw, -STEER_LIMIT, STEER_LIMIT);
@@ -777,11 +777,11 @@ void followQueueStep() {
     stopMotor();
     return;
   }
-  if (queuePaused) {
+  if (!coordViveMode && queuePaused) {
     stopMotor();
     return;
   }
-  if (nodeQueue.empty()) {
+  if (!coordViveMode && nodeQueue.empty()) {
     stopMotor();
     return;
   }
@@ -792,25 +792,30 @@ void followQueueStep() {
   viveTargetY = graph.nodes[currentNode].y;
   viveTargetDead = graph.nodes[currentNode].dead;
   }
-  bool reached = viveGoToPointStep(viveTargetDead);
+  bool reached = viveGoToPointStep();
   if (reached) {
     if (viveTargetDead) {
-      int hitSpeed = wasBackward ? -100 : 100;
-      for (int k = 0; k < 3; k++) {
+      int hitSpeed = wasBackward ? -80 : 80;
+
+      uint8_t hitTimes = 3;
+
+      for (int k = 0; k < hitTimes; k++) {
         rawSetMotorPWM( hitSpeed, LEFT_MOTOR);
         rawSetMotorPWM( hitSpeed, RIGHT_MOTOR);
-        delay(600);
+        if (k == 0) delay(700);
+        else delay(350);
         rawSetMotorPWM(-hitSpeed, LEFT_MOTOR);
         rawSetMotorPWM(-hitSpeed, RIGHT_MOTOR);
-        delay(250);
+        delay(150);
       }
       rawSetMotorPWM(0, LEFT_MOTOR);
       rawSetMotorPWM(0, RIGHT_MOTOR);
     }
 
+    if (!coordViveMode){
     int removed = nodeQueue.front();
     nodeQueue.erase(nodeQueue.begin());
-    
+    }
   }
 }
 
@@ -973,7 +978,8 @@ void handleGoToPoint() {
   if (server.hasArg("x") && server.hasArg("y")) {
     viveTargetX = server.arg("x").toInt();
     viveTargetY = server.arg("y").toInt();
-    viveDirectionMode = 0;
+    viveTargetDead = server.arg("dead") == "1" || server.arg("dead") == "true";
+    coordViveMode = true;
     controlMode = MODE_VIVE;
     server.send(200, "text/plain", "Moving");
   } else {
@@ -1037,6 +1043,7 @@ void handleRoute() {
   }
 
   controlMode = MODE_VIVE;
+  coordViveMode = false;
   viveDirectionMode = 0;
 
   String s = "[";
@@ -1232,10 +1239,6 @@ void loop() {
       }
       if (millis() - lastViveMove >= VIVE_MOVE_PERIOD) {
         followQueueStep();
-        // Optional single target mode if /gotopoint used alone:
-        // if (viveTargetX != 0 || viveTargetY != 0) {
-        //   viveGoToPointStep();
-        // }
       
       lastViveMove = millis();
       }
