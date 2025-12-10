@@ -177,13 +177,13 @@ unsigned long lastTOFRead       = 0;
 unsigned long lastVive          = 0;
 unsigned long lastViveMove      = 0;
 
-const unsigned long CONTROL_PERIOD    = 60;
-const unsigned long SPEED_CALC_PERIOD = 50;
+const unsigned long CONTROL_PERIOD    = 5;
+const unsigned long SPEED_CALC_PERIOD = 5;
 const unsigned long TOF_READ_PERIOD   = 50;
 const unsigned long IMU_READ_PERIOD   = 50;
 const unsigned long PRINT_PERIOD      = 1000;
-const unsigned long VIVE_READ_PERIOD       = 80;
-const unsigned long VIVE_MOVE_PERIOD       = 160;
+const unsigned long VIVE_READ_PERIOD       = 100;
+const unsigned long VIVE_MOVE_PERIOD       = 100;
 bool coordViveMode = false;
 // ========== GRAPH + BFS (Code A) ==========
 class Node {
