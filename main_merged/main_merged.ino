@@ -26,14 +26,14 @@
 // LEFT Motor & Encoder (as in your Code A)
 #define ENCODER_A          15
 #define ENCODER_B          16
-#define MOTOR_RPWM         41
-#define MOTOR_LPWM         42
+#define MOTOR_RPWM         6
+#define MOTOR_LPWM         7
 
 // RIGHT  Motor & Encoder (as in your Code A)
 #define RIGHT_ENCODER_A    1
 #define RIGHT_ENCODER_B    2
-#define RIGHT_MOTOR_RPWM   18
-#define RIGHT_MOTOR_LPWM   17
+#define RIGHT_MOTOR_RPWM   41
+#define RIGHT_MOTOR_LPWM   42
 
 // I2C + TCA9548A (Code B)
 #define I2C_SDA            47
@@ -335,7 +335,7 @@ static inline int pwmFromRPM(float rpm) {
 void setMotorPWM(int rpmCmd, int motorSide) {
   int scaled = pwmFromRPM(rpmCmd);
   if (motorSide == RIGHT_MOTOR) {
-    scaled = -scaled;
+    // scaled = -scaled;
     if (scaled > 0) {
       ledcWrite(RIGHT_MOTOR_RPWM, scaled);
       ledcWrite(RIGHT_MOTOR_LPWM, 0);
@@ -349,11 +349,11 @@ void setMotorPWM(int rpmCmd, int motorSide) {
     return;
   }
   if (scaled > 0) {
-    ledcWrite(MOTOR_RPWM, scaled);
-    ledcWrite(MOTOR_LPWM, 0);
-  } else if (scaled < 0) {
     ledcWrite(MOTOR_RPWM, 0);
-    ledcWrite(MOTOR_LPWM, -scaled);
+    ledcWrite(MOTOR_LPWM, scaled);
+  } else if (scaled < 0) {
+    ledcWrite(MOTOR_RPWM, -scaled);
+    ledcWrite(MOTOR_LPWM, 0);
   } else {
     ledcWrite(MOTOR_RPWM, 0);
     ledcWrite(MOTOR_LPWM, 0);
@@ -406,8 +406,8 @@ void calculateSpeed() {
     float revLeft  = dl / 480.0f;
     float revRight = dr / 480.0f;
 
-    currentSpeed      = - revLeft  / dt * 1000.0f * 60.0f;
-    rightCurrentSpeed =   revRight / dt * 1000.0f * 60.0f;
+    currentSpeed      =   revLeft  / dt * 1000.0f * 60.0f;
+    rightCurrentSpeed = - revRight / dt * 1000.0f * 60.0f;
 
     lastEncoderCount      = encoderCount;
     rightLastEncoderCount = rightEncoderCount;
