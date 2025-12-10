@@ -230,13 +230,13 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
         <h4>Goal Distances (mm)</h4>
         <label>Front Goal:</label>
-        <input id="frontGoal" type="number" value="150" min="50" max="800" step="10">
+        <input id="frontGoal" type="number" value="100" min="50" max="800" step="10">
         <br>
         <label>Right Goal Front:</label>
-        <input id="rightGoal1" type="number" value="100" min="50" max="800" step="10">
+        <input id="rightGoal1" type="number" value="60" min="50" max="800" step="10">
         <br>
         <label>Right Goal Back:</label>
-        <input id="rightGoal2" type="number" value="100" min="50" max="800" step="10">
+        <input id="rightGoal2" type="number" value="60" min="50" max="800" step="10">
         <button onclick="updateWallGoals()">Update Goals</button>
 
         <h4>Wall-Follow PD</h4>

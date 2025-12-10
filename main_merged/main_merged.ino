@@ -112,9 +112,9 @@ float       filteredGyroZ = 0.0;
 
 // ========== WALL FOLLOW (Code B) ==========
 bool  wallFollowMode      = false;
-int   frontGoalDistance   = 150;
-int   rightGoalDistance1  = 100;
-int   rightGoalDistance2  = 100;
+int   frontGoalDistance   = 100;
+int   rightGoalDistance1  = 60;
+int   rightGoalDistance2  = 60;
 float wallFollowSpeed     = 40;
 
 float lastDistError       = 0;
