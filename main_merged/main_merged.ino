@@ -59,14 +59,14 @@ volatile uint32_t commandCount = 0;
 // ========== CONTROL CONSTANTS ==========
 const int   PWM_FREQ           = 5000;
 const int   PWM_RESOLUTION     = 8;
-const float GOAL_REACHED_THRESHOLD = 200.0f; // mm radius for BFS nodes
+const float GOAL_REACHED_THRESHOLD = 150.0f; // mm radius for BFS nodes
 
 // ========== MOTOR & ENCODER ==========
 volatile long encoderCount      = 0;
 volatile long lastEncoderCount  = 0;
 volatile long rightEncoderCount = 0;
 volatile long rightLastEncoderCount = 0;
-
+uint8_t correctTime = 0;
 float currentSpeed       = 0;
 float rightCurrentSpeed  = 0;
 float targetSpeed        = 0;
@@ -78,7 +78,7 @@ float steeringValue      = 0;
 // ========== PID ==========
 struct PIDController {
   float Kp = 0.4;
-  float Ki = 0.01;
+  float Ki = 1.5;
   float Kd = 0.0;
   float error = 0;
   float lastError = 0;
@@ -100,7 +100,6 @@ Adafruit_VL53L0X right2TOF;
 int frontDistance  = 0;
 int rightDistance1 = 0;
 int rightDistance2 = 0;
-
 // ========== IMU (Code B) ==========
 Adafruit_MPU6050 mpu;
 float currentAngle   = 0;
@@ -737,6 +736,24 @@ void computeVivePose() {
   }
 }
 
+void hitTower(){
+  int hitSpeed = wasBackward ? -60 : 60;
+
+  uint8_t hitTimes = 4;
+
+  for (int k = 0; k < hitTimes; k++) {
+    rawSetMotorPWM( hitSpeed, LEFT_MOTOR);
+    rawSetMotorPWM( hitSpeed, RIGHT_MOTOR);
+    if (k == 0) delay(600);
+    else delay(350);
+    rawSetMotorPWM(-hitSpeed, LEFT_MOTOR);
+    rawSetMotorPWM(-hitSpeed, RIGHT_MOTOR);
+    delay(150);
+  }
+  rawSetMotorPWM(0, LEFT_MOTOR);
+  rawSetMotorPWM(0, RIGHT_MOTOR);
+}
+
 bool viveGoToPointStep() {
   if (!leftValid || !rightValid) {
     stopMotor();
@@ -768,9 +785,9 @@ bool viveGoToPointStep() {
   desiredHeading = wasBackward ? desiredBackward : desiredForward;
 
   const float DEG2RAD        = (float)M_PI / 180.0f;
-  const float TURN_THRESHOLD = viveTargetDead ? (15.0f * DEG2RAD) : (40.0f * DEG2RAD);
+  const float TURN_THRESHOLD = viveTargetDead ? (5.0f * DEG2RAD) : (40.0f * DEG2RAD);
   const float TURN_GAIN      = viveTargetDead ? 20.0f : 35.0f;
-  const int   TURN_LIMIT     = viveTargetDead ? 20 : 60;
+  const int   TURN_LIMIT     = viveTargetDead ? 20 : 40;
 
   bool alignNeeded = fabs(err) > TURN_THRESHOLD;
   if (alignNeeded) {
@@ -824,25 +841,11 @@ void followQueueStep() {
   viveTargetX = graph.nodes[currentNode].x;
   viveTargetY = graph.nodes[currentNode].y;
   viveTargetDead = graph.nodes[currentNode].dead;
-
-  bool reached = viveGoToPointStep();
-  if (reached) {
+  if (viveGoToPointStep()) correctTime ++;
+  else correctTime = 0;
+  if (correctTime > 5) {
     if (viveTargetDead) {
-      int hitSpeed = wasBackward ? -80 : 80;
-
-      uint8_t hitTimes = 3;
-
-      for (int k = 0; k < hitTimes; k++) {
-        rawSetMotorPWM( hitSpeed, LEFT_MOTOR);
-        rawSetMotorPWM( hitSpeed, RIGHT_MOTOR);
-        if (k == 0) delay(700);
-        else delay(350);
-        rawSetMotorPWM(-hitSpeed, LEFT_MOTOR);
-        rawSetMotorPWM(-hitSpeed, RIGHT_MOTOR);
-        delay(150);
-      }
-      rawSetMotorPWM(0, LEFT_MOTOR);
-      rawSetMotorPWM(0, RIGHT_MOTOR);
+      hitTower();
     }
     int removed = nodeQueue.front();
     nodeQueue.erase(nodeQueue.begin());
@@ -865,10 +868,11 @@ void followXYQueueStep() {
   viveTargetY = t.y;
   viveTargetDead = t.isDead;
 
-  bool reached = viveGoToPointStep();
-  if (reached) {
+  if (viveGoToPointStep()) correctTime ++;
+  else correctTime = 0;
+  if (correctTime > 5) {
     xyQueue.pop_front();
-
+    if (viveTargetDead) hitTower();
   }
 }
 
@@ -1044,11 +1048,10 @@ void handleGoToPoint() {
     server.send(400, "text/plain", "Missing x or y");
     return;
   }
-
   int x = server.arg("x").toInt();
   int y = server.arg("y").toInt();
   bool isDead = server.arg("dead") == "1" || server.arg("dead") == "true";
-
+  
   // Push into XY queue (FIFO)
   xyQueue.push_back({x, y, isDead});
 
@@ -1323,19 +1326,23 @@ void setup() {
   lastVive          = millis();
 
   // Graph nodes (from Code A)
+    // Graph nodes (from Code A)
   graph.addNode(4150,5200,{1,2,4}); //0
-  graph.addNode(5000,5224,{0,3,4}); //1
+  graph.addNode(5000,5224,{0,3,4,10}); //1
   graph.addNode(4220,6030,{0,3,4}); //2
   graph.addNode(5000,6000,{1,2,4}); //3
   graph.addNode(4450,6130,{2,3,5}); //4
   graph.addNode(4420,6370,{4}, true); //5
-  graph.addNode(3930,6442,{4,7}); //6 small neck near tower
-  graph.addNode(3830,6342,{6,8}); //7 small neck near tower2(deep)
 
-  graph.addNode(3111,6480       ,{7,9}); //8 point to the ramp(corner)
-  graph.addNode(2800,4740,{8}); //9 on the ramp
-
-
+  graph.addNode(4130,2130,{7,8}); //6
+  graph.addNode(5020,2130,{6,9}); //7
+  graph.addNode(3980,3030,{6,9}); //8
+  graph.addNode(5120,3000, {7,8,10}); //9
+  graph.addNode(5043,4190, {9, 1}); //10
+  // graph.addNode({}); //9
+  // graph.addNode({}); //9
+  // graph.addNode({}); //9
+  
 }
 
 // ========== LOOP ==========
