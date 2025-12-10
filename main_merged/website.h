@@ -241,10 +241,13 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
         <h4>Wall-Follow PD</h4>
         <label>Kp:</label>
-        <input id="wallKp" type="number" value="1.5" step="0.1">
+        <input id="wallKp" type="number" value="0.05" step="0.1">
         <br>
         <label>Kd:</label>
         <input id="wallKd" type="number" value="0.8" step="0.05">
+        <br>
+        <label>Kpa:</label>
+        <input id="wallKpa" type="number" value="0.1" step="0.1">
         <button onclick="updateWallPD()">Update PD</button>
       </div>
 
@@ -426,6 +429,7 @@ MODE  : ${data.mode}`;
             const rg2 = document.getElementById('rightGoal2');
             const wkp = document.getElementById('wallKp');
             const wkd = document.getElementById('wallKd');
+            const wkpa= document.getElementById('wallKpa');
 
             // Accept multiple possible key names
             if (typeof data.frontGoalDistance !== 'undefined' && fg) fg.value = data.frontGoalDistance;
@@ -436,8 +440,11 @@ MODE  : ${data.mode}`;
                           : (typeof data.wallKp !== 'undefined') ? data.wallKp : undefined;
             const kdVal = (typeof data.wallFollowKd !== 'undefined') ? data.wallFollowKd
                           : (typeof data.wallKd !== 'undefined') ? data.wallKd : undefined;
+            const kpaVal = (typeof data.wallFollowKpa !== 'undefined') ? data.wallFollowKpa
+                          : (typeof data.wallKpa !== 'undefined') ? data.wallKpa : undefined;
             if (typeof kpVal !== 'undefined' && wkp) wkp.value = kpVal;
             if (typeof kdVal !== 'undefined' && wkd) wkd.value = kdVal;
+            if (typeof kpaVal!== 'undefined' && wkpa)wkpa.value= kpaVal;
 
             wallPrefilled = true;
           }
@@ -563,8 +570,9 @@ MODE  : ${data.mode}`;
     function updateWallPD() {
       const kp = document.getElementById('wallKp').value;
       const kd = document.getElementById('wallKd').value;
+      const kpa= document.getElementById('wallKpa').value;
 
-      fetch(`/wall/pd?kp=${kp}&kd=${kd}`)
+      fetch(`/wall/pd?kp=${kp}&kd=${kd}&kpa=${kpa}`)
         .then(r => r.text())
         .then(t => {
           refreshStatus();
