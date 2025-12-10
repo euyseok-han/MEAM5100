@@ -75,8 +75,8 @@ float steeringValue      = 0;
 
 // ========== PID ==========
 struct PIDController {
-  float Kp = 0.3;
-  float Ki = 1.5;
+  float Kp = 0.4;
+  float Ki = 0.01;
   float Kd = 0.0;
   float error = 0;
   float lastError = 0;
