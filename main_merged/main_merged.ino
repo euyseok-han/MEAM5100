@@ -177,13 +177,13 @@ unsigned long lastTOFRead       = 0;
 unsigned long lastVive          = 0;
 unsigned long lastViveMove      = 0;
 
-const unsigned long CONTROL_PERIOD    = 5;
-const unsigned long SPEED_CALC_PERIOD = 5;
+const unsigned long CONTROL_PERIOD    = 2;
+const unsigned long SPEED_CALC_PERIOD = 2;
 const unsigned long TOF_READ_PERIOD   = 50;
 const unsigned long IMU_READ_PERIOD   = 50;
 const unsigned long PRINT_PERIOD      = 1000;
-const unsigned long VIVE_READ_PERIOD       = 100;
-const unsigned long VIVE_MOVE_PERIOD       = 100;
+const unsigned long VIVE_READ_PERIOD       = 2;
+const unsigned long VIVE_MOVE_PERIOD       = 20;
 bool coordViveMode = false;
 // ========== GRAPH + BFS (Code A) ==========
 class Node {
@@ -843,7 +843,8 @@ void followQueueStep() {
   viveTargetDead = graph.nodes[currentNode].dead;
   if (viveGoToPointStep()) correctTime ++;
   else correctTime = 0;
-  if (correctTime > 5) {
+  uint8_t correctThreshold = viveTargetDead ? 4 : 0;
+  if (correctTime > correctThreshold) {
     if (viveTargetDead) {
       hitTower();
     }
@@ -870,7 +871,8 @@ void followXYQueueStep() {
 
   if (viveGoToPointStep()) correctTime ++;
   else correctTime = 0;
-  if (correctTime > 5) {
+  uint8_t correctThreshold = viveTargetDead ? 4 : 0;
+  if (correctTime > correctThreshold) {
     xyQueue.pop_front();
     if (viveTargetDead) hitTower();
   }
