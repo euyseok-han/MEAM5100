@@ -2,8 +2,8 @@
 
 // 控制总线舵机转动例程(bus servo rotation control program)
 
-#define SERVO_SERIAL_RX   44
-#define SERVO_SERIAL_TX   43
+#define SERVO_SERIAL_RX   18
+#define SERVO_SERIAL_TX   17
 #define receiveEnablePin  13
 #define transmitEnablePin 14
 HardwareSerial HardwareSerial(2);
@@ -30,14 +30,16 @@ void setup() {
 bool start_en = true;
 void loop() {
   // put your main code here, to run repeatedly:
-  if(millis() - startServoMove > 1000){
-    if(millis() - lastServoMove > 610){
-      if(pos == 500){
-        pos = 900;
+  if(millis() - startServoMove > 1500){
+    if(millis() - lastServoMove > 2000){
+      if(pos == 0){
+        pos = 1000;
       } else {
-        pos = 500;
+        pos = 0;
       }
-      BusServo.LobotSerialServoMove(1,pos,600);  //500 or 900
+      Serial.print("Moving to ");
+      Serial.println(pos);
+      BusServo.LobotSerialServoMove(1,pos,1500);  //500 or 900
       lastServoMove = millis();
     }
     
