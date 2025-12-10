@@ -51,6 +51,7 @@
 const char* ssid = "TP-Link_8A8C";
 const char* password = "12488674";
 WebServer server(80);
+volatile uint32_t commandCount = 0;
 
 // ========== CONTROL CONSTANTS ==========
 const int   PWM_FREQ           = 5000;
@@ -115,7 +116,7 @@ int   rightGoalDistance2  = 100;
 float wallFollowSpeed     = 40;
 
 float lastDistError       = 0;
-float wallFollowKp        = 1.5;
+float wallFollowKp        = 0.05;
 float wallFollowKd        = 0.8;
 float wallAngleKp         = 0.1;
 unsigned long lastWallFollowUpdate = 0;
@@ -442,8 +443,8 @@ bool turnByAngle(float targetAngle) {
   while (angleError >  180) angleError -= 360;
   while (angleError < -180) angleError += 360;
 
-  const float angleTolerance = 2.0;
-  const float Kp_turn        = 0.8;
+  const float angleTolerance = 5.0;
+  const float Kp_turn        = 0.5;
   const float minTurnSpeed   = 15;
   const float maxTurnSpeed   = 50;
 
@@ -512,19 +513,39 @@ void wallFollowPD() {
   if (lastWallFollowUpdate == 0) dt = TOF_READ_PERIOD / 1000.0f;
   lastWallFollowUpdate = currentTime;
 
-  float avgRight  = (rightDistance1 + rightDistance2) / 2.0f;
-  float distError = avgRight - rightGoalDistance1;
-  float deri      = (dt > 0) ? (distError - lastDistError) / dt : 0;
-  lastDistError   = distError;
+  // float avgRight  = (rightDistance1 + rightDistance2) / 2.0f;
+  // float distError = avgRight - rightGoalDistance1;
+  // float deri      = (dt > 0) ? (distError - lastDistError) / dt : 0;
+  // lastDistError   = distError;
 
-  float angleRight = rightDistance1 - rightDistance2;
+  float distOneError = rightDistance1 - rightGoalDistance1;
+
+  float angleError = rightDistance1 - rightDistance2;
 
   // float steer = wallFollowKp * distError + wallFollowKd * deri;
-  float steer = wallFollowKp * distError - wallAngleKp * angleRight;
-  steer = constrain(steer, -60, 60);
+  // float steer = wallFollowKp * distError - wallAngleKp * angleRight;
+  float steer = wallFollowKp * distOneError + wallAngleKp * angleError;
+  Serial.print("wallAngleKp: ");
+  Serial.print(wallAngleKp);
+  Serial.print("  Steer: ");
+  Serial.print(steer);
+  Serial.print("  Distance Error: ");
+  Serial.print(distOneError);
+  Serial.print("  Angle Error: ");
+  Serial.println(angleError);
+  steer = constrain(steer, -20, 20);
 
   targetSpeed      = wallFollowSpeed + steer;
   rightTargetSpeed = wallFollowSpeed - steer;
+
+  // if(distOneError > 50 || distOneError < -50){
+  //   targetSpeed      = wallFollowSpeed + steer;
+  //   rightTargetSpeed = wallFollowSpeed - steer;
+  // } else {
+  //   targetSpeed = wallFollowSpeed + currentAngle * 0.5;
+  //   rightTargetSpeed = wallFollowSpeed - currentAngle * 0.5;
+  // }
+
 }
 
 // ========== WALL STATE MACHINE ==========
@@ -538,8 +559,8 @@ void updateStateMachine() {
         stopMotor();
         updateGyroIntegration();
         resetYaw();
-        targetTurnAngle = 90;
-      } else if (rightDistance1 > WALL_LOST_THRESHOLD) {
+        targetTurnAngle = 70;
+      } else if (rightDistance2 > WALL_LOST_THRESHOLD) {
         currentState = STATE_BLIND_FORWARD;
         stateStartTime = millis();
         targetSpeed      = wallFollowSpeed * 0.6;
@@ -563,7 +584,7 @@ void updateStateMachine() {
         currentState = STATE_OUTER_CORNER;
         stopMotor();
         resetYaw();
-        targetTurnAngle = -90;
+        targetTurnAngle = -70;
       }
       break;
 
@@ -755,7 +776,9 @@ void handleRoot() {
 }
 
 void handleSetSpeed() {
+  commandCount++;
   if (server.hasArg("speed") && server.hasArg("steering")) {
+   
     baseSpeed     = server.arg("speed").toFloat();
     steeringValue = server.arg("steering").toFloat();
 
@@ -780,16 +803,19 @@ void handleSetSpeed() {
 
 // legacy alias
 void handleControl() {
+  commandCount++;
   handleSetSpeed();
 }
 
 void handleStop() {
+  commandCount++;
   stopMotor();
   controlMode = MODE_MANUAL;
   server.send(200, "text/plain", "Motor stopped");
 }
 
 void handleSetPID() {
+  commandCount++;
   if (server.hasArg("kp") && server.hasArg("ki") && server.hasArg("kd")) {
     leftPID.Kp = server.arg("kp").toFloat();
     leftPID.Ki = server.arg("ki").toFloat();
@@ -805,6 +831,7 @@ void handleSetPID() {
 
 // legacy alias
 void handlePID() {
+  commandCount++;
   handleSetPID();
 }
 
@@ -846,6 +873,7 @@ void handleStatus() {
 }
 
 void handleWallEnable() {
+  commandCount++;
   if (server.hasArg("enable")) {
     bool enable = (server.arg("enable") == "1" || server.arg("enable") == "true");
     wallFollowMode = enable;
@@ -865,6 +893,7 @@ void handleWallEnable() {
 }
 
 void handleWallGoals() {
+  commandCount++;
   if (server.hasArg("frontGoal"))  frontGoalDistance   = server.arg("frontGoal").toInt();
   if (server.hasArg("rightGoal1")) rightGoalDistance1  = server.arg("rightGoal1").toInt();
   if (server.hasArg("rightGoal2")) rightGoalDistance2  = server.arg("rightGoal2").toInt();
@@ -872,12 +901,15 @@ void handleWallGoals() {
 }
 
 void handleWallPD() {
+  commandCount++;
   if (server.hasArg("kp")) wallFollowKp = server.arg("kp").toFloat();
   if (server.hasArg("kd")) wallFollowKd = server.arg("kd").toFloat();
+  if (server.hasArg("kpa"))wallAngleKp  = server.arg("kpa").toFloat();
   server.send(200, "text/plain", "Wall PD updated");
 }
 
 void handleMode() {
+  commandCount++;
   if (!server.hasArg("m")) {
     server.send(400, "text/plain", "Missing m");
     return;
@@ -904,6 +936,7 @@ void handleMode() {
 }
 
 void handleGoToPoint() {
+  commandCount++;
   if (server.hasArg("x") && server.hasArg("y")) {
     viveTargetX = server.arg("x").toInt();
     viveTargetY = server.arg("y").toInt();
@@ -983,12 +1016,14 @@ void handleRoute() {
 }
 
 void handleQueueClear() {
+  commandCount++;
   nodeQueue.clear();
   stopMotor();
   server.send(200, "text/plain", "Queue cleared");
 }
 
 void handleQueueSkip() {
+  commandCount++;
   if (!nodeQueue.empty()) {
     int skipped = nodeQueue.front();
     nodeQueue.erase(nodeQueue.begin());
@@ -1001,6 +1036,7 @@ void handleQueueSkip() {
 }
 
 void handleQueuePause() {
+  commandCount++;
   if (!server.hasArg("enable")) {
     server.send(400, "text/plain", "Missing enable");
     return;
@@ -1038,14 +1074,14 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(ENCODER_A),       encoderISR,      RISING);
   attachInterrupt(digitalPinToInterrupt(RIGHT_ENCODER_A), rightEncoderISR, RISING);
 
-  // WiFi with static IP
-  IPAddress local_IP(192, 168, 1, 111);
-  IPAddress gateway(192, 168, 1, 1);
-  IPAddress subnet(255, 255, 255, 0);
+  // // WiFi with static IP
+  // IPAddress local_IP(192, 168, 1, 111);
+  // IPAddress gateway(192, 168, 1, 1);
+  // IPAddress subnet(255, 255, 255, 0);
 
-  if (!WiFi.config(local_IP, gateway, subnet)) {
-    Serial.println("Failed to configure static IP");
-  }
+  // if (!WiFi.config(local_IP, gateway, subnet)) {
+  //   Serial.println("Failed to configure static IP");
+  // }
 
   WiFi.begin(ssid, password);
   Serial.print("Connecting to WiFi ");
@@ -1157,13 +1193,12 @@ void loop() {
       break;
 
     case MODE_WALL:
-      // if (wallFollowMode) {
-      //   updateStateMachine();
-      // } else {
-      //   stopMotor();
-      //   currentState = STATE_IDLE;
-      // }
-      wallFollowPD();
+      if (wallFollowMode) {
+        updateStateMachine();
+      } else {
+        stopMotor();
+        currentState = STATE_IDLE;
+      }
       break;
 
     case MODE_VIVE:
