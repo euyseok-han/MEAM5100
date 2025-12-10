@@ -328,7 +328,7 @@ void IRAM_ATTR rightEncoderISR() {
 
 // ========== MOTOR CONTROL ==========
 static inline int pwmFromRPM(float rpm) {
-  int pwm = (int)(rpm * 255.0f / 120.0f);
+  int pwm = (int)(rpm * 255.0f / 330.0f);
   return constrain(pwm, -255, 255);
 }
 
@@ -403,8 +403,8 @@ void calculateSpeed() {
     long dl = encoderCount      - lastEncoderCount;
     long dr = rightEncoderCount - rightLastEncoderCount;
 
-    float revLeft  = dl / 1400.0f;
-    float revRight = dr / 1400.0f;
+    float revLeft  = dl / 480.0f;
+    float revRight = dr / 480.0f;
 
     currentSpeed      = - revLeft  / dt * 1000.0f * 60.0f;
     rightCurrentSpeed =   revRight / dt * 1000.0f * 60.0f;
