@@ -188,8 +188,8 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <label>Steering: <span id="steeringValue" class="speed-value">0</span></label>
         <input type="range" id="steeringSlider" min="-60" max="60" value="0" step="5" oninput="updateControlLocal()">
 
-        <button class="stop-btn" onclick="stopMotor()">STOP</button>
-        <button onclick="setControl(currentSpeed, currentSteering)" style="background:#008CFF;">Apply</button>
+        <button class="stop-btn" onclick="stopMotor()">STOP("S" key)</button>
+        <button onclick="setControl(currentSpeed, currentSteering)" style="background:#008CFF;">Go("Space" key)</button>
       </div>
 
       <!-- PID TUNING -->
