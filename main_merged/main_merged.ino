@@ -78,7 +78,7 @@ float steeringValue      = 0;
 // ========== PID ==========
 struct PIDController {
   float Kp = 0.4;
-  float Ki = 1.5;
+  float Ki = 0.01;
   float Kd = 0.0;
   float error = 0;
   float lastError = 0;
@@ -183,8 +183,8 @@ const unsigned long SPEED_CALC_PERIOD = 50;
 const unsigned long TOF_READ_PERIOD   = 50;
 const unsigned long IMU_READ_PERIOD   = 50;
 const unsigned long PRINT_PERIOD      = 1000;
-const unsigned long VIVE_READ_PERIOD       = 10;
-const unsigned long VIVE_MOVE_PERIOD       = 100;
+const unsigned long VIVE_READ_PERIOD       = 80;
+const unsigned long VIVE_MOVE_PERIOD       = 160;
 bool coordViveMode = false;
 // ========== GRAPH + BFS (Code A) ==========
 class Node {
@@ -769,8 +769,8 @@ bool viveGoToPointStep() {
 
   const float DEG2RAD        = (float)M_PI / 180.0f;
   const float TURN_THRESHOLD = viveTargetDead ? (15.0f * DEG2RAD) : (40.0f * DEG2RAD);
-  const float TURN_GAIN      = viveTargetDead ? 10.0f : 20.0f;
-  const int   TURN_LIMIT     = viveTargetDead ? 5 : 10;
+  const float TURN_GAIN      = viveTargetDead ? 20.0f : 35.0f;
+  const int   TURN_LIMIT     = viveTargetDead ? 20 : 60;
 
   bool alignNeeded = fabs(err) > TURN_THRESHOLD;
   if (alignNeeded) {
@@ -785,11 +785,11 @@ bool viveGoToPointStep() {
     stopMotor();
     return true;
   }
-  const float SPEED_GAIN = 100.0f;
+  const float SPEED_GAIN = 25.0f;
   float bfsSpeed = dist / SPEED_GAIN; // if dist is like 500, it like 25. If 2000, should be 80
-  bfsSpeed = constrain((int)bfsSpeed, 20, 50);
+  bfsSpeed = constrain((int)bfsSpeed, 25, 100);
   const float STEER_GAIN  = 10.0f; // if err is like 30deg(0.5rad), steer is like 5
-  const int   STEER_LIMIT = 20;
+  const int   STEER_LIMIT = 30;
   float steerRaw = err * STEER_GAIN;
   float steer    = constrain((int)steerRaw, -STEER_LIMIT, STEER_LIMIT);
 
@@ -897,7 +897,7 @@ void handleSetSpeed() {
 
     server.send(200, "text/plain",
       "Control set: Speed=" + String(baseSpeed) +
-      " Steering=" + String(steeringValue));
+      "   Steering=" + String(steeringValue));
   } else {
     server.send(400, "text/plain", "Missing speed or steering");
   }
@@ -1385,7 +1385,7 @@ void loop() {
 
   if (millis() - lastSpeedCalc >= SPEED_CALC_PERIOD) {
     calculateSpeed();
-    lastSpeedCalc = SPEED_CALC_PERIOD;
+    lastSpeedCalc = millis();
   }
 
   if (millis() - lastControlUpdate >= CONTROL_PERIOD) {
