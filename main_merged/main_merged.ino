@@ -1,98 +1,90 @@
 /*
- * MEAM5100 Unified Control - main_merged.ino
- *
- * Combines three modes into one sketch:
- *  - Manual speed + steering with PID speed control (web dashboard /setspeed)
- *  - Wall-following with ToF sensors + simple PD steering
- *  - Vive dual-marker navigation to a target (X,Y)
- *
- * Notes on pins (ESP32-S3 defaults used in this project):
- *  - I2C remains on SDA=10, SCL=18
- *  - Vive pins moved to 11 (front) and 14 (back) to avoid I2C conflict
- *  - RIGHT_ENCODER_B kept at 16 (consistent with manual_and_wall_follow)
- *
- * If your hardware uses different pins, update the defines below.
+ * MEAM5100 Unified Control
+ * - MODE_MANUAL: web manual drive + PID speed control
+ * - MODE_WALL:   wall-follow with TOF + IMU (via TCA9548A)
+ * - MODE_VIVE:   Vive-based BFS route following
  */
+
+// ToDo: remove stopmotor() between vive points
 
 #include <WiFi.h>
 #include <WebServer.h>
 #include <Wire.h>
-
 #include <Adafruit_VL53L0X.h>
-#include <Adafruit_VL53L1X.h>
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
+#include <vector>
+#include <queue>
+#include <deque>
+#include <algorithm>
+#include <math.h>
 
-#include "website.h"      // Dashboard UI (manual control, PID, status)
-#include "vive510.h"      // Vive tracker driver (kept in subdir)
+#include "website.h"
+#include "vive510.h"
 
-// ==================== PIN DEFINITIONS (ESP32-S3) ====================
+// ========== PIN DEFINITIONS (ESP32-S3) ==========
+#define LEFT_MOTOR         0
+#define RIGHT_MOTOR        1
 
-#define LEFT_MOTOR         0   // Left motor identifier
-#define RIGHT_MOTOR        1   // Right motor identifier
+// LEFT Motor & Encoder (as in your Code A)
+#define ENCODER_A          15
+#define ENCODER_B          16
+#define MOTOR_RPWM         6
+#define MOTOR_LPWM         7
 
-// Motor 1 (Left Wheel)
-#define ENCODER_A          1   // Left encoder channel A
-#define ENCODER_B          2   // Left encoder channel B
-#define MOTOR_RPWM         18  // Left motor RPWM = Forward direction
-#define MOTOR_LPWM         17  // Left motor LPWM = Reverse direction
+// RIGHT  Motor & Encoder (as in your Code A)
+#define RIGHT_ENCODER_A    1
+#define RIGHT_ENCODER_B    2
+#define RIGHT_MOTOR_RPWM   41
+#define RIGHT_MOTOR_LPWM   42
 
-// Motor 2 (Right Wheel)
-#define RIGHT_ENCODER_A    15  // Right encoder channel A
-#define RIGHT_ENCODER_B    16  // Right encoder channel B
-#define RIGHT_MOTOR_RPWM   41  // Right motor RPWM = Forward direction
-#define RIGHT_MOTOR_LPWM   42  // Right motor LPWM = Reverse direction
+// I2C + TCA9548A (Code B)
+#define I2C_SDA            47
+#define I2C_SCL            48
+#define TOF_FRONT_BUS      0
+#define TOF_SIDE_FRONT_BUS 1
+#define TOF_SIDE_BACK_BUS  2
+#define IMU_BUS            3
 
-// I2C Sensors (TOF + MPU6050)
-#define I2C_SDA            11  // GPIO 10 (SDA)
-#define I2C_SCL            12  // GPIO 18 (SCL)
+// Vive trackers (Code A style: left/right)
+#define VIVE_LEFT_PIN      4
+#define VIVE_RIGHT_PIN     5
 
-// ToF XSHUT pins (for power/reset control)
-#define TOF_XSHUT_FRONT     14  // VL53L1X
-#define TOF_XSHUT_RIGHT     13  // VL53L0X (front-right)
-#define TOF_XSHUT_RIGHT2    21  // VL53L0X (back-right)
-
-// Vive tracker pins (moved off I2C pins)
-#define VIVE_FRONT_PIN     5
-#define VIVE_BACK_PIN      4
-
-// ==================== WIFI ====================
+// ========== WIFI ==========
 const char* ssid = "TP-Link_8A8C";
 const char* password = "12488674";
-
 WebServer server(80);
+volatile uint32_t commandCount = 0;
 
-// ==================== MOTOR & ENCODER ====================
-volatile long encoderCount = 0;
-volatile long lastEncoderCount = 0;
+// ========== CONTROL CONSTANTS ==========
+const int   PWM_FREQ           = 5000;
+const int   PWM_RESOLUTION     = 8;
+const float GOAL_REACHED_THRESHOLD = 150.0f; // mm radius for BFS nodes
+
+// ========== MOTOR & ENCODER ==========
+volatile long encoderCount      = 0;
+volatile long lastEncoderCount  = 0;
 volatile long rightEncoderCount = 0;
 volatile long rightLastEncoderCount = 0;
+uint8_t correctTime = 0;
+float currentSpeed       = 0;
+float rightCurrentSpeed  = 0;
+float targetSpeed        = 0;
+float rightTargetSpeed   = 0;
 
-float currentSpeed = 0;        // Left RPM
-float rightCurrentSpeed = 0;   // Right RPM
-float targetSpeed = 0;         // Left target RPM
-float rightTargetSpeed = 0;    // Right target RPM
+float baseSpeed          = 0;
+float steeringValue      = 0;
 
-int lastLeftPWM = 0;           // Last applied PWM (0..255)
-int lastRightPWM = 0;          // Last applied PWM (0..255)
-
-float baseSpeed = 0;           // UI input
-float steeringValue = 0;       // UI input
-
-const int PWM_FREQ = 5000;
-const int PWM_RESOLUTION = 8;  // 0..255
-
+// ========== PID ==========
 struct PIDController {
-  float Kp = 0.3;
-  float Ki = 1.5;   // match single_motor_test default
+  float Kp = 0.4;
+  float Ki = 1.5;
   float Kd = 0.0;
-
   float error = 0;
   float lastError = 0;
   float integral = 0;
   float derivative = 0;
   float output = 0;
-
   float integralMax = 100;
   float integralMin = -100;
 };
@@ -100,105 +92,244 @@ struct PIDController {
 PIDController leftPID;
 PIDController rightPID;
 
-// ==================== TOF SENSORS ====================
-Adafruit_VL53L1X frontTOF = Adafruit_VL53L1X();
-Adafruit_VL53L0X rightTOF = Adafruit_VL53L0X();
-Adafruit_VL53L0X right2TOF = Adafruit_VL53L0X();
+// ========== TOF (Code B) ==========
+Adafruit_VL53L0X frontTOF;
+Adafruit_VL53L0X rightTOF;
+Adafruit_VL53L0X right2TOF;
 
-int frontDistance = 0;          // mm
-int rightDistance1 = 0;         // mm (front-right)
-int rightDistance2 = 0;         // mm (back-right)
-
-// ==================== MPU6050 ====================
+int frontDistance  = 0;
+int rightDistance1 = 0;
+int rightDistance2 = 0;
+// ========== IMU (Code B) ==========
 Adafruit_MPU6050 mpu;
-float currentAngle = 0;         // degrees
-float gyroZOffset = 0;          // rad/s offset converted later
+float currentAngle   = 0;
+float gyroZOffset    = 0;
 unsigned long lastGyroTime = 0;
 
-// ==================== WALL FOLLOWING ====================
-bool wallFollowMode = false;
-int frontGoalDistance = 150;    // mm
-int rightGoalDistance1 = 100;   // mm
-int rightGoalDistance2 = 100;   // mm
-float wallFollowSpeed = 40;     // RPM base forward
+const float GYRO_ALPHA    = 0.8;
+const float GYRO_DEADBAND = 0.5;
+float       filteredGyroZ = 0.0;
 
-float lastDistError = 0;        // For derivative
-float wallFollowKp = 1.5;       // PD gains
-float wallFollowKd = 0.8;
+// ========== WALL FOLLOW (Code B) ==========
+bool  wallFollowMode      = false;
+int   frontGoalDistance   = 150;
+int   rightGoalDistance1  = 100;
+int   rightGoalDistance2  = 100;
+float wallFollowSpeed     = 40;
 
-// Simple state enumeration for display (kept minimal)
+float lastDistError       = 0;
+float wallFollowKp        = 0.05;
+float wallFollowKd        = 0.8;
+float wallAngleKp         = 0.1;
+unsigned long lastWallFollowUpdate = 0;
+
 enum RobotState {
   STATE_IDLE,
-  STATE_WALL_FOLLOW
+  STATE_WALL_FOLLOW,
+  STATE_INNER_CORNER,
+  STATE_OUTER_CORNER,
+  STATE_BLIND_FORWARD,
+  STATE_SEEK_WALL
 };
-
 RobotState currentState = STATE_IDLE;
 
-// ==================== CONTROL MODE ====================
+const int  WALL_LOST_THRESHOLD    = 800;
+const int  BLIND_FORWARD_DURATION = 800;
+float      targetTurnAngle        = 0;
+unsigned long stateStartTime      = 0;
+unsigned long lastPrint           = 0;
+
 enum ControlMode {
   MODE_MANUAL = 0,
   MODE_WALL   = 1,
   MODE_VIVE   = 2
 };
-
 ControlMode controlMode = MODE_MANUAL;
 
-// ==================== VIVE (dual sensors) ====================
-Vive510 viveFront(VIVE_FRONT_PIN);
-Vive510 viveBack(VIVE_BACK_PIN);
+Vive510 viveLeft(VIVE_LEFT_PIN);
+Vive510 viveRight(VIVE_RIGHT_PIN);
 
-uint16_t fx, fy, bx, by;        // filtered front/back positions
-uint16_t fx0, fy0, fx1, fy1, fx2, fy2;
-uint16_t bx0, by0, bx1, by1, bx2, by2;
+uint16_t lx, ly, rx, ry;
+uint16_t lx0, ly0, lx1, ly1, lx2, ly2;
+uint16_t rx0, ry0, rx1, ry1, rx2, ry2;
 
-bool frontValid = false;
-bool backValid  = false;
+struct ViveBuffer {
+  uint16_t buf[7];
+  int count = 0;
+};
 
-float robotX = 0, robotY = 0;   // Vive-derived pose
-float robotHeading = 0;         // radians
-bool viveNavigationMode = false;
-int viveTargetX = 0;
-int viveTargetY = 0;
+ViveBuffer initLX, initLY, initRX, initRY;
+bool leftValid  = false;
+bool rightValid = false;
+bool viveTargetDead = false;
+bool wasBackward = false;
+float robotX         = 0;
+float robotY         = 0;
+float robotHeading   = 0;
+float desiredHeading = 0;
 
-// ==================== TIMING ====================
+int viveTargetX      = 0;
+int viveTargetY      = 0;
+
 unsigned long lastControlUpdate = 0;
-unsigned long lastSpeedCalc = 0;
-unsigned long lastTOFRead = 0;
+unsigned long lastSpeedCalc     = 0;
+unsigned long lastTOFRead       = 0;
+unsigned long lastVive          = 0;
+unsigned long lastViveMove      = 0;
 
-const unsigned long CONTROL_PERIOD     = 50;   // ms
-const unsigned long SPEED_CALC_PERIOD  = 100;  // ms
-const unsigned long TOF_READ_PERIOD    = 50;   // ms
+const unsigned long CONTROL_PERIOD    = 60;
+const unsigned long SPEED_CALC_PERIOD = 50;
+const unsigned long TOF_READ_PERIOD   = 50;
+const unsigned long IMU_READ_PERIOD   = 50;
+const unsigned long PRINT_PERIOD      = 1000;
+const unsigned long VIVE_READ_PERIOD       = 80;
+const unsigned long VIVE_MOVE_PERIOD       = 160;
+bool coordViveMode = false;
+// ========== GRAPH + BFS (Code A) ==========
+class Node {
+public:
+  int x, y;
+  bool dead;
+  std::vector<int> neighbors;
 
-// ==================== UTILS ====================
+  Node(int xCoord, int yCoord, std::vector<int> neigh, bool isDead = false)
+      : x(xCoord), y(yCoord), neighbors(neigh), dead(isDead) {}
+};
 
-// (kept for reference; no longer used by Vive)
-uint32_t med3(uint32_t a, uint32_t b, uint32_t c) {
-  if ((a <= b) && (a <= c)) return (b <= c) ? b : c;
-  else if ((b <= a) && (b <= c)) return (a <= c) ? a : c;
-  else return (a <= b) ? a : b;
+class Graph {
+public:
+  std::vector<Node> nodes;
+  void addNode(int x, int y, std::vector<int> neigh, bool isDead = false) {
+    nodes.push_back(Node(x, y, neigh, isDead));
+  }
+  std::vector<int> bfs(int start, int goal) {
+    int N = nodes.size();
+    if (start < 0 || start >= N || goal < 0 || goal >= N) return {};
+    std::vector<bool> visited(N, false);
+    std::vector<int> parent(N, -1);
+    std::queue<int> q;
+    visited[start] = true;
+    q.push(start);
+
+    while (!q.empty()) {
+      int cur = q.front(); q.pop();
+      if (cur == goal) return reconstructPath(parent, start, goal);
+      for (int nb : nodes[cur].neighbors) {
+        if (nb < 0 || nb >= N) continue;
+        if (!visited[nb]) {
+          visited[nb] = true;
+          parent[nb] = cur;
+          q.push(nb);
+        }
+      }
+    }
+    return {};
+  }
+
+private:
+  std::vector<int> reconstructPath(std::vector<int>& parent, int start, int goal) {
+    std::vector<int> path;
+    int cur = goal;
+    while (cur != -1) {
+      path.push_back(cur);
+      if (cur == start) break;
+      cur = parent[cur];
+    }
+    std::reverse(path.begin(), path.end());
+    return path;
+  }
+};
+
+Graph graph;
+std::vector<int> nodeQueue;
+bool queuePaused = false;
+
+// ========== XY GOTO QUEUE ==========
+struct XYTarget {
+  int x;
+  int y;
+  bool isDead;
+};
+
+std::deque<XYTarget> xyQueue; // FIFO queue for coordinate targets
+
+// ========== UTILS ==========
+float normalizeAngle(float a) {
+  while (a >  M_PI) a -= 2 * M_PI;
+  while (a < -M_PI) a += 2 * M_PI;
+  return a;
+
+
 }
 
-// Robust outlier-rejecting filter for Vive (3-sample window)
-uint16_t filterVive(uint16_t a, uint16_t b, uint16_t c) {
-  uint16_t v0 = a, v1 = b, v2 = c;
+uint16_t median7(uint16_t a, uint16_t b, uint16_t c, uint16_t d, uint16_t e, uint16_t f, uint16_t g) {
+  uint16_t arr[7] = {a, b, c, d, e, f, g};
+  for (int i = 0; i < 6; i++) {
+    for (int j = i + 1; j < 7; j++) {
+      if (arr[j] < arr[i]) {
+        uint16_t t = arr[i];
+        arr[i] = arr[j];
+        arr[j] = t;
+      }
+    }
+  }
+  return arr[3];
+}
+uint16_t filterVive(uint16_t raw, ViveBuffer &v) {
 
-  // sort v0 <= v1 <= v2
-  if (v1 < v0) { uint16_t t = v0; v0 = v1; v1 = t; }
-  if (v2 < v1) { uint16_t t = v1; v1 = v2; v2 = t; }
-  if (v1 < v0) { uint16_t t = v0; v0 = v1; v1 = t; }
+    
+    if (v.count < 7) {
+        v.buf[v.count++] = raw;
 
-  const int TH = 600; // outlier threshold (tune 400–800 if needed)
+        if (v.count == 7) {
+            uint16_t m = median7(v.buf[0], v.buf[1], v.buf[2], v.buf[3], v.buf[4], v.buf[5], v.buf[6]);
+            return m;
+        }
+        return raw;
+    }
+    for (int i = 0; i < 6; i++)
+        v.buf[i] = v.buf[i+1];
+    v.buf[6] = raw;
+    uint16_t m = median7(v.buf[0], v.buf[1], v.buf[2], v.buf[3], v.buf[4], v.buf[5], v.buf[6]);
 
-  if (abs((int)v1 - (int)v0) < TH)
-    return (uint16_t)((v1 + v0) / 2);
-  if (abs((int)v2 - (int)v1) < TH)
-    return (uint16_t)((v2 + v1) / 2);
-
-  // all three far apart → fall back to middle value
-  return v1;
+    return m;
 }
 
-// ==================== ENCODER ISR ====================
+
+int findNearestNode(float x, float y) {
+  int best = -1;
+  float bestDist = 1e12;
+  for (int i = 0; i < (int)graph.nodes.size(); i++) {
+    float dx = x - graph.nodes[i].x;
+    float dy = y - graph.nodes[i].y;
+    float d2 = dx * dx + dy * dy;
+    if (d2 < bestDist) {
+      bestDist = d2;
+      best = i;
+    }
+  }
+  return best;
+}
+
+void resetYaw() {
+  currentAngle = 0;
+  filteredGyroZ = 0.0;  // Reset low-pass filter
+  lastGyroTime = millis();
+}
+
+bool vivePoseValid() {
+  return !(robotX == 0 && robotY == 0);
+}
+
+// ========== TCA9548A ==========
+void setMultiplexerBus(uint8_t bus) {
+  Wire.beginTransmission(0x70);
+  Wire.write(1 << bus);
+  Wire.endTransmission();
+  delay(2);
+}
+
+// ========== ENCODERS ==========
 void IRAM_ATTR encoderISR() {
   if (digitalRead(ENCODER_B) == HIGH) encoderCount++;
   else encoderCount--;
@@ -209,19 +340,16 @@ void IRAM_ATTR rightEncoderISR() {
   else rightEncoderCount--;
 }
 
-// ==================== MOTOR CONTROL ====================
+// ========== MOTOR CONTROL ==========
 static inline int pwmFromRPM(float rpm) {
-  int pwm = (int)(rpm * 255.0f / 120.0f); // scale ±120 RPM to ±255 PWM
+  int pwm = (int)(rpm * 255.0f / 330.0f);
   return constrain(pwm, -255, 255);
 }
 
-void setMotorPWM(int pwmValue, int motorSide) {
-  // pwmValue is in "PID output space" (RPM-ish), convert to PWM
-  int scaled = pwmFromRPM(pwmValue);
-
+void setMotorPWM(int rpmCmd, int motorSide) {
+  int scaled = pwmFromRPM(rpmCmd);
   if (motorSide == RIGHT_MOTOR) {
-    // Invert for right motor wiring
-    scaled = -scaled;
+    // scaled = -scaled;
     if (scaled > 0) {
       ledcWrite(RIGHT_MOTOR_RPWM, scaled);
       ledcWrite(RIGHT_MOTOR_LPWM, 0);
@@ -232,48 +360,74 @@ void setMotorPWM(int pwmValue, int motorSide) {
       ledcWrite(RIGHT_MOTOR_RPWM, 0);
       ledcWrite(RIGHT_MOTOR_LPWM, 0);
     }
-    lastRightPWM = abs(scaled);
     return;
   }
-
-  // Left motor
   if (scaled > 0) {
-    ledcWrite(MOTOR_RPWM, scaled);
-    ledcWrite(MOTOR_LPWM, 0);
-  } else if (scaled < 0) {
     ledcWrite(MOTOR_RPWM, 0);
-    ledcWrite(MOTOR_LPWM, -scaled);
+    ledcWrite(MOTOR_LPWM, scaled);
+  } else if (scaled < 0) {
+    ledcWrite(MOTOR_RPWM, -scaled);
+    ledcWrite(MOTOR_LPWM, 0);
   } else {
     ledcWrite(MOTOR_RPWM, 0);
     ledcWrite(MOTOR_LPWM, 0);
   }
-  lastLeftPWM = abs(scaled);
+}
+
+// Direct PWM command without RPM mapping (helper for short pulses)
+void rawSetMotorPWM(int pwm, int motorSide) {
+  int scaled = constrain(pwm, -255, 255);
+  if (motorSide == RIGHT_MOTOR) {
+    // scaled = -scaled;
+    if (scaled > 0) {
+      ledcWrite(RIGHT_MOTOR_RPWM, scaled);
+      ledcWrite(RIGHT_MOTOR_LPWM, 0);
+    } else if (scaled < 0) {
+      ledcWrite(RIGHT_MOTOR_RPWM, 0);
+      ledcWrite(RIGHT_MOTOR_LPWM, -scaled);
+    } else {
+      ledcWrite(RIGHT_MOTOR_RPWM, 0);
+      ledcWrite(RIGHT_MOTOR_LPWM, 0);
+    }
+    return;
+  }
+  if (scaled > 0) {
+    ledcWrite(MOTOR_RPWM, 0);
+    ledcWrite(MOTOR_LPWM, scaled);
+  } else if (scaled < 0) {
+    ledcWrite(MOTOR_RPWM, -scaled);
+    ledcWrite(MOTOR_LPWM, 0);
+  } else {
+    ledcWrite(MOTOR_RPWM, 0);
+    ledcWrite(MOTOR_LPWM, 0);
+  }
 }
 
 void stopMotor() {
-  targetSpeed = 0;
-  rightTargetSpeed = 0;
-  baseSpeed = 0;
-  steeringValue = 0;
-
-  leftPID.integral = 0; leftPID.lastError = 0;
-  rightPID.integral = 0; rightPID.lastError = 0;
+  targetSpeed        = 0;
+  rightTargetSpeed   = 0;
+  baseSpeed          = 0;
+  steeringValue      = 0;
+  leftPID.integral   = 0;
+  leftPID.lastError  = 0;
+  rightPID.integral  = 0;
+  rightPID.lastError = 0;
 }
 
-// ==================== PID ====================
+// ========== PID ==========
 float calculatePID(PIDController &pid, float target, float current, float dt) {
   pid.error = target - current;
   pid.integral += pid.error * dt;
   pid.integral = constrain(pid.integral, pid.integralMin, pid.integralMax);
-  pid.derivative = (dt > 0) ? (pid.error - pid.lastError) / dt : 0;
+  if (dt > 0) pid.derivative = (pid.error - pid.lastError) / dt;
+  else        pid.derivative = 0;
   pid.output = pid.Kp * pid.error + pid.Ki * pid.integral + pid.Kd * pid.derivative;
   pid.lastError = pid.error;
   return pid.output;
 }
 
 void updateMotorControl() {
-  unsigned long now = millis();
-  float dt = (now - lastControlUpdate) / 1000.0f;
+  float dt = (millis() - lastControlUpdate) / 1000.0f;
   if (dt <= 0) dt = CONTROL_PERIOD / 1000.0f;
 
   float leftOut  = calculatePID(leftPID,  targetSpeed,      currentSpeed,      dt);
@@ -283,7 +437,7 @@ void updateMotorControl() {
   setMotorPWM(rightOut, RIGHT_MOTOR);
 }
 
-// ==================== SPEED CALC ====================
+// ========== SPEED ==========
 void calculateSpeed() {
   unsigned long now = millis();
   float dt = now - lastSpeedCalc;
@@ -291,8 +445,11 @@ void calculateSpeed() {
     long dl = encoderCount      - lastEncoderCount;
     long dr = rightEncoderCount - rightLastEncoderCount;
 
-    currentSpeed      = dl / 1400.0f / dt * 1000.0f * 60.0f; // rev per ms -> RPM
-    rightCurrentSpeed = dr / 1400.0f / dt * 1000.0f * 60.0f;
+    float revLeft  = dl / 480.0f;
+    float revRight = dr / 480.0f;
+
+    currentSpeed      =   revLeft  / dt * 1000.0f * 60.0f;
+    rightCurrentSpeed = - revRight / dt * 1000.0f * 60.0f;
 
     lastEncoderCount      = encoderCount;
     rightLastEncoderCount = rightEncoderCount;
@@ -300,17 +457,21 @@ void calculateSpeed() {
   }
 }
 
-// ==================== MPU6050 GYRO ====================
+// ========== GYRO / IMU ==========
 float readGyroZdeg() {
+  setMultiplexerBus(IMU_BUS);
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
-  return (g.gyro.z - gyroZOffset) * 57.2958f; // rad/s -> deg/s
+  float gyroZ = (g.gyro.z - gyroZOffset) * 57.2958f;
+  filteredGyroZ = GYRO_ALPHA * filteredGyroZ + (1.0 - GYRO_ALPHA) * gyroZ;
+  if (fabs(filteredGyroZ) < GYRO_DEADBAND) return 0.0;
+  return filteredGyroZ;
 }
 
 void updateGyroIntegration() {
   unsigned long now = millis();
   float dt = (now - lastGyroTime) / 1000.0f;
-  if (dt <= 0) return;
+  if (dt * 1000 <= IMU_READ_PERIOD) return;
   lastGyroTime = now;
 
   currentAngle += readGyroZdeg() * dt;
@@ -318,305 +479,515 @@ void updateGyroIntegration() {
   while (currentAngle < -180) currentAngle += 360;
 }
 
-void resetYaw() {
-  currentAngle = 0;
-  lastGyroTime = millis();
+// ========== TURN BY ANGLE (WALL) ==========
+bool turnByAngle(float targetAngle) {
+  float angleError = targetAngle - currentAngle;
+  while (angleError >  180) angleError -= 360;
+  while (angleError < -180) angleError += 360;
+
+  const float angleTolerance = 5.0;
+  const float Kp_turn        = 0.5;
+  const float minTurnSpeed   = 15;
+  const float maxTurnSpeed   = 50;
+
+  if (fabs(angleError) < angleTolerance) {
+    stopMotor();
+    return true;
+  }
+
+  float turnSpeed = Kp_turn * fabs(angleError);
+  turnSpeed = constrain(turnSpeed, minTurnSpeed, maxTurnSpeed);
+
+  if (angleError > 0) {
+    targetSpeed      = -turnSpeed;
+    rightTargetSpeed =  turnSpeed;
+  } else {
+    targetSpeed      =  turnSpeed;
+    rightTargetSpeed = -turnSpeed;
+  }
+  return false;
 }
 
-// ==================== TOF READ ====================
+// ========== TOF READ ==========
 void readTOFSensors() {
   unsigned long now = millis();
   if (now - lastTOFRead < TOF_READ_PERIOD) return;
 
-  // VL53L1X front (interrupt-driven API)
-  if (frontTOF.dataReady()) {
-    int16_t d = frontTOF.distance();
-    frontDistance = (d > 0) ? d : 8190;
-    frontTOF.clearInterrupt();
+  // Front
+  setMultiplexerBus(TOF_FRONT_BUS);
+  VL53L0X_RangingMeasurementData_t measureFront;
+  frontTOF.rangingTest(&measureFront, false);
+  if (measureFront.RangeStatus != 4) {
+    frontDistance = measureFront.RangeMilliMeter;
+  } else {
+    frontDistance = 8190;
   }
 
-  // VL53L0X right front
-  VL53L0X_RangingMeasurementData_t m1;
-  rightTOF.rangingTest(&m1, false);
-  rightDistance1 = (m1.RangeStatus != 4) ? m1.RangeMilliMeter : 8190;
+  // Side front
+  setMultiplexerBus(TOF_SIDE_FRONT_BUS);
+  VL53L0X_RangingMeasurementData_t measureRight1;
+  rightTOF.rangingTest(&measureRight1, false);
+  if (measureRight1.RangeStatus != 4) {
+    rightDistance1 = measureRight1.RangeMilliMeter;
+  } else {
+    rightDistance1 = 8190;
+  }
 
-  // VL53L0X right back
-  VL53L0X_RangingMeasurementData_t m2;
-  right2TOF.rangingTest(&m2, false);
-  rightDistance2 = (m2.RangeStatus != 4) ? m2.RangeMilliMeter : 8190;
+  // Side back
+  setMultiplexerBus(TOF_SIDE_BACK_BUS);
+  VL53L0X_RangingMeasurementData_t measureRight2;
+  right2TOF.rangingTest(&measureRight2, false);
+  if (measureRight2.RangeStatus != 4) {
+    rightDistance2 = measureRight2.RangeMilliMeter;
+  } else {
+    rightDistance2 = 8190;
+  }
 
   lastTOFRead = now;
 }
 
-// ==================== WALL FOLLOW (PD) ====================
+// ========== WALL FOLLOW PD ==========
 void wallFollowPD() {
-  // average side distance
-  float avgRight = (rightDistance1 + rightDistance2) / 2.0f;
-  float distError = avgRight - rightGoalDistance1; // goal uses rightGoalDistance1
+  unsigned long currentTime = millis();
+  if (rightDistance1 > WALL_LOST_THRESHOLD || rightDistance2 > WALL_LOST_THRESHOLD) return;
 
-  float deri = (distError - lastDistError) / (TOF_READ_PERIOD / 1000.0f);
-  lastDistError = distError;
+  float dt = (currentTime - lastWallFollowUpdate) / 1000.0f;
+  if (lastWallFollowUpdate == 0) dt = TOF_READ_PERIOD / 1000.0f;
+  lastWallFollowUpdate = currentTime;
 
-  float steer = wallFollowKp * distError + wallFollowKd * deri;
-  steer = constrain(steer, -60, 60);
+  // float avgRight  = (rightDistance1 + rightDistance2) / 2.0f;
+  // float distError = avgRight - rightGoalDistance1;
+  // float deri      = (dt > 0) ? (distError - lastDistError) / dt : 0;
+  // lastDistError   = distError;
 
-  // Set wheel targets (left faster when turning right => steering positive)
-  targetSpeed      = wallFollowSpeed - steer;
-  rightTargetSpeed = wallFollowSpeed + steer;
+  float distOneError = rightDistance1 - rightGoalDistance1;
+
+  float angleError = rightDistance1 - rightDistance2;
+
+  // float steer = wallFollowKp * distError + wallFollowKd * deri;
+  // float steer = wallFollowKp * distError - wallAngleKp * angleRight;
+  float steer = wallFollowKp * distOneError + wallAngleKp * angleError;
+  Serial.print("wallAngleKp: ");
+  Serial.print(wallAngleKp);
+  Serial.print("  Steer: ");
+  Serial.print(steer);
+  Serial.print("  Distance Error: ");
+  Serial.print(distOneError);
+  Serial.print("  Angle Error: ");
+  Serial.println(angleError);
+  steer = constrain(steer, -20, 20);
+
+  targetSpeed      = wallFollowSpeed + steer;
+  rightTargetSpeed = wallFollowSpeed - steer;
+
+  // if(distOneError > 50 || distOneError < -50){
+  //   targetSpeed      = wallFollowSpeed + steer;
+  //   rightTargetSpeed = wallFollowSpeed - steer;
+  // } else {
+  //   targetSpeed = wallFollowSpeed + currentAngle * 0.5;
+  //   rightTargetSpeed = wallFollowSpeed - currentAngle * 0.5;
+  // }
+
 }
 
-// ==================== VIVE READ + NAV ====================
+// ========== WALL STATE MACHINE ==========
+void updateStateMachine() {
+  switch (currentState) {
+    case STATE_WALL_FOLLOW:
+      wallFollowPD();
+      if (frontDistance < frontGoalDistance) {
+        currentState = STATE_INNER_CORNER;
+        stateStartTime = millis();
+        stopMotor();
+        updateGyroIntegration();
+        resetYaw();
+        targetTurnAngle = 70;
+      } else if (rightDistance2 > WALL_LOST_THRESHOLD) {
+        currentState = STATE_BLIND_FORWARD;
+        stateStartTime = millis();
+        targetSpeed      = wallFollowSpeed * 0.6;
+        rightTargetSpeed = wallFollowSpeed * 0.6;
+      }
+      break;
 
-// New robust dual-Vive read with sync + outlier rejection
+    case STATE_INNER_CORNER:
+      if (turnByAngle(targetTurnAngle)) {
+        currentState = STATE_WALL_FOLLOW;
+        resetYaw();
+        lastDistError = 0;
+        lastWallFollowUpdate = 0;
+      }
+      break;
+
+    case STATE_BLIND_FORWARD:
+      targetSpeed      = wallFollowSpeed * 0.6;
+      rightTargetSpeed = wallFollowSpeed * 0.6;
+      if (millis() - stateStartTime > BLIND_FORWARD_DURATION) {
+        currentState = STATE_OUTER_CORNER;
+        stopMotor();
+        resetYaw();
+        targetTurnAngle = -70;
+      }
+      break;
+
+    case STATE_OUTER_CORNER:
+      if (turnByAngle(targetTurnAngle)) {
+        currentState = STATE_SEEK_WALL;
+      }
+      break;
+
+    case STATE_SEEK_WALL:
+      targetSpeed      = wallFollowSpeed * 0.5;
+      rightTargetSpeed = wallFollowSpeed * 0.5;
+      if (rightDistance1 < WALL_LOST_THRESHOLD) {
+        currentState = STATE_WALL_FOLLOW;
+        lastDistError = 0;
+        lastWallFollowUpdate = 0;
+      }
+      break;
+
+    case STATE_IDLE:
+      stopMotor();
+      break;
+  }
+
+  if (millis() - lastPrint > PRINT_PERIOD) {
+    Serial.printf("STATE=%d Front=%d RF=%d RB=%d Yaw=%.1f\n",
+                  currentState, frontDistance, rightDistance1, rightDistance2, currentAngle);
+    lastPrint = millis();
+  }
+}
+
+// ========== VIVE READ + POSE (Code A) ==========
 void readDualVive() {
-  frontValid = false;
-  backValid  = false;
+  leftValid  = false;
+  rightValid = false;
+  // last good sample for pair-based spike rejection
+static uint16_t lastLX = 0, lastLY = 0;
 
-  // ===== FRONT VIVE =====
-  if (viveFront.status() != VIVE_RECEIVING) {
-    viveFront.sync(5);
-  } else {
+if (viveLeft.status() != VIVE_RECEIVING) {
+    viveLeft.sync(5);
+} else {
     // shift history
-    fx2 = fx1; fy2 = fy1;
-    fx1 = fx0; fy1 = fy0;
+    lx2 = lx1; ly2 = ly1;
+    lx1 = lx0; ly1 = ly0;
 
-    fx0 = viveFront.xCoord();
-    fy0 = viveFront.yCoord();
+    // new raw sample
+    uint16_t rawX = viveLeft.xCoord();
+    uint16_t rawY = viveLeft.yCoord();
 
-    uint16_t fxf = filterVive(fx0, fx1, fx2);
-    uint16_t fyf = filterVive(fy0, fy1, fy2);
+    // now push through the individual filters
+    uint16_t fx = filterVive(rawX, initLX);
+    uint16_t fy = filterVive(rawY, initLY);
 
-    // validity check
-    if (fxf > 1000 && fyf > 1000 && fxf < 8000 && fyf < 8000) {
-      fx = fxf;
-      fy = fyf;
-      frontValid = true;
+    // update outputs only after filtering
+    if (fx > 0 && fy > 0) {
+        lx = fx;
+        ly = fy;
+        leftValid = true;
+        lastLX = fx;
+        lastLY = fy;
     }
-  }
-
-  // ===== BACK VIVE =====
-  if (viveBack.status() != VIVE_RECEIVING) {
-    viveBack.sync(5);
-  } else {
-    bx2 = bx1; by2 = by1;
-    bx1 = bx0; by1 = by0;
-
-    bx0 = viveBack.xCoord();
-    by0 = viveBack.yCoord();
-
-    uint16_t bxf = filterVive(bx0, bx1, bx2);
-    uint16_t byf = filterVive(by0, by1, by2);
-
-    if (bxf > 1000 && byf > 1000 && bxf < 8000 && byf < 8000) {
-      bx = bxf;
-      by = byf;
-      backValid = true;
-    }
-  }
 }
 
-// New robust pose computation with single-sensor fallback
+static uint16_t lastRX = 0, lastRY = 0;
+
+if (viveRight.status() != VIVE_RECEIVING) {
+    viveRight.sync(5);
+} else {
+    rx2 = rx1; ry2 = ry1;
+    rx1 = rx0; ry1 = ry0;
+
+    uint16_t rawX = viveRight.xCoord();
+    uint16_t rawY = viveRight.yCoord();
+
+    uint16_t fx = filterVive(rawX, initRX);
+    uint16_t fy = filterVive(rawY, initRY);
+
+    if (fx > 0 && fy > 0) {
+        rx = fx;
+        ry = fy;
+        rightValid = true;
+        lastRX = fx;
+        lastRY = fy;
+    }
+}
+}
+
+
 void computeVivePose() {
-  // CASE 1: both sensors valid → best pose (midpoint + heading)
-  if (frontValid && backValid) {
-    robotX = (fx + bx) / 2.0f;
-    robotY = (fy + by) / 2.0f;
-
-    // Heading = angle from BACK → FRONT
-    robotHeading = atan2f((float)fy - (float)by, (float)fx - (float)bx);
-    return;
+  if (leftValid && rightValid) {
+    robotX = (lx + rx) / 2.0f;
+    robotY = (ly + ry) / 2.0f;
+    robotHeading = atan2f(ly - ry, lx - rx) - (float)M_PI / 2.0f;
+    robotHeading = normalizeAngle(robotHeading);
+  } else if (leftValid && !rightValid) {
+    robotX = lx;
+    robotY = ly;
+    robotHeading = 0;
+  } else if (!leftValid && rightValid) {
+    robotX = rx;
+    robotY = ry;
+    robotHeading = 0;
+  } else {
+    robotHeading = 0;
+    robotX = 0;
+    robotY = 0;
   }
-
-  // CASE 2: only front valid → use front as pose, keep old heading
-  if (frontValid && !backValid) {
-    robotX = fx;
-    robotY = fy;
-    return;
-  }
-
-  // CASE 3: only back valid → use back as pose, keep old heading
-  if (!frontValid && backValid) {
-    robotX = bx;
-    robotY = by;
-    return;
-  }
-
-  // CASE 4: neither valid → keep last pose & heading
 }
 
-void viveGoToPoint() {
-  if (!viveNavigationMode) return;
+void hitTower(){
+  int hitSpeed = wasBackward ? -60 : 60;
 
-  if (!frontValid && !backValid) {
+  uint8_t hitTimes = 4;
+
+  for (int k = 0; k < hitTimes; k++) {
+    rawSetMotorPWM( hitSpeed, LEFT_MOTOR);
+    rawSetMotorPWM( hitSpeed, RIGHT_MOTOR);
+    if (k == 0) delay(600);
+    else delay(350);
+    rawSetMotorPWM(-hitSpeed, LEFT_MOTOR);
+    rawSetMotorPWM(-hitSpeed, RIGHT_MOTOR);
+    delay(150);
+  }
+  rawSetMotorPWM(0, LEFT_MOTOR);
+  rawSetMotorPWM(0, RIGHT_MOTOR);
+}
+
+bool viveGoToPointStep() {
+  if (!leftValid || !rightValid) {
     stopMotor();
-    return;
+    return false;
+  }
+  if (!vivePoseValid()) {
+    stopMotor();
+    return false;
   }
 
   float dx = (float)viveTargetX - robotX;
   float dy = (float)viveTargetY - robotY;
   float dist = sqrtf(dx * dx + dy * dy);
 
-  if (dist < 80) {
+  if (!viveTargetDead){
+    if (dist < GOAL_REACHED_THRESHOLD) {
+      stopMotor();
+      return true;
+    }
+  }
+  float desiredForward  = atan2f(dy, dx);
+  float desiredBackward = desiredForward + (float)M_PI;
+  if (desiredBackward > (float)M_PI) desiredBackward -= 2.0f * (float)M_PI;
+  float errF = normalizeAngle(desiredForward  - robotHeading);
+  float errB = normalizeAngle(desiredBackward - robotHeading);
+
+  wasBackward = (fabs(errB) < fabs(errF));
+  float err = wasBackward ? errB : errF;
+  desiredHeading = wasBackward ? desiredBackward : desiredForward;
+
+  const float DEG2RAD        = (float)M_PI / 180.0f;
+  const float TURN_THRESHOLD = viveTargetDead ? (5.0f * DEG2RAD) : (40.0f * DEG2RAD);
+  const float TURN_GAIN      = viveTargetDead ? 20.0f : 35.0f;
+  const int   TURN_LIMIT     = viveTargetDead ? 20 : 40;
+
+  bool alignNeeded = fabs(err) > TURN_THRESHOLD;
+  if (alignNeeded) {
+    float turnRaw = err * TURN_GAIN;
+    float turn    = constrain((int)turnRaw, -TURN_LIMIT, TURN_LIMIT);
+    targetSpeed      = -turn;
+    rightTargetSpeed =  turn;
+    return false;
+  }
+  
+  if (viveTargetDead) {
     stopMotor();
-    viveNavigationMode = false;
+    return true;
+  }
+  const float SPEED_GAIN = 25.0f;
+  float bfsSpeed = dist / SPEED_GAIN; // if dist is like 500, it like 25. If 2000, should be 80
+  bfsSpeed = constrain((int)bfsSpeed, 25, 100);
+  const float STEER_GAIN  = 10.0f; // if err is like 30deg(0.5rad), steer is like 5
+  const int   STEER_LIMIT = 30;
+  float steerRaw = err * STEER_GAIN;
+  float steer    = constrain((int)steerRaw, -STEER_LIMIT, STEER_LIMIT);
+
+  if (wasBackward) {
+    bfsSpeed = -bfsSpeed;
+    steer = steer;
+  }
+  float leftCmd  = bfsSpeed - steer;
+  float rightCmd = bfsSpeed + steer;
+
+  targetSpeed      = leftCmd;
+  rightTargetSpeed = rightCmd;
+
+  return false;
+}
+
+void followQueueStep() {
+  if (!vivePoseValid()) {
+    stopMotor();
+    return;
+  }
+  if (queuePaused) {
+    stopMotor();
+    return;
+  }
+  if ( nodeQueue.empty()) {
+    stopMotor();
     return;
   }
 
-  float desired = atan2f(dy, dx);
-  float err = desired - robotHeading;
-  while (err >  3.14159f) err -= 6.28318f;
-  while (err < -3.14159f) err += 6.28318f;
-
-  float turn  = err  * 150.0f;   // turning term
-  float speed = dist * 0.05f;    // forward term
-
-  turn  = constrain((int)turn,  -50, 50);
-  speed = constrain((int)speed, 20, 80);
-
-  targetSpeed      = speed - turn;
-  rightTargetSpeed = speed + turn;
+  int currentNode = nodeQueue.front();
+  viveTargetX = graph.nodes[currentNode].x;
+  viveTargetY = graph.nodes[currentNode].y;
+  viveTargetDead = graph.nodes[currentNode].dead;
+  if (viveGoToPointStep()) correctTime ++;
+  else correctTime = 0;
+  if (correctTime > 5) {
+    if (viveTargetDead) {
+      hitTower();
+    }
+    int removed = nodeQueue.front();
+    nodeQueue.erase(nodeQueue.begin());
+  }
 }
 
-// ==================== WEB SERVER HANDLERS ====================
+// Process coordinate-based XY queue (FIFO)
+void followXYQueueStep() {
+  if (!vivePoseValid()) {
+    stopMotor();
+    return;
+  }
+  if (xyQueue.empty()) {
+    stopMotor();
+    return;
+  }
 
-// Root – your dashboard HTML
+  XYTarget &t = xyQueue.front();
+  viveTargetX = t.x;
+  viveTargetY = t.y;
+  viveTargetDead = t.isDead;
+
+  if (viveGoToPointStep()) correctTime ++;
+  else correctTime = 0;
+  if (correctTime > 5) {
+    xyQueue.pop_front();
+    if (viveTargetDead) hitTower();
+  }
+}
+
+// ========== WEB HANDLERS ==========
 void handleRoot() {
   server.send_P(200, "text/html", INDEX_HTML);
 }
 
-// ---- MANUAL CONTROL (from single_motor_test) ----
 void handleSetSpeed() {
+  commandCount++;
   if (server.hasArg("speed") && server.hasArg("steering")) {
+   
     baseSpeed     = server.arg("speed").toFloat();
     steeringValue = server.arg("steering").toFloat();
 
-    // Small values boosted a bit (like original project)
     if (fabs(steeringValue) <= 5) steeringValue *= 1.4f;
-    if (fabs(baseSpeed) <= 10)    baseSpeed     *= 1.4f;
+    if (fabs(baseSpeed)    <= 10) baseSpeed     *= 1.4f;
 
-    // Spin behavior (kept identical to your original logic)
-    if (baseSpeed == 0.0f) {
-      Serial.print("spin");
-      targetSpeed      = -baseSpeed - steeringValue;
-      rightTargetSpeed =  baseSpeed - steeringValue;
-    }
-
-    // Differential mapping: steering positive → turn right (left faster)
-    targetSpeed      = -baseSpeed - steeringValue;
+    targetSpeed      =  baseSpeed + steeringValue;
     rightTargetSpeed =  baseSpeed - steeringValue;
 
-    // Constrain to ±120 RPM
     targetSpeed      = constrain(targetSpeed,      -120, 120);
     rightTargetSpeed = constrain(rightTargetSpeed, -120, 120);
 
-    // Manual mode when using this API
     controlMode = MODE_MANUAL;
 
     server.send(200, "text/plain",
       "Control set: Speed=" + String(baseSpeed) +
-      " Steering=" + String(steeringValue));
-    Serial.printf("Control - Base: %.1f, Steering: %.1f -> Left: %.1f, Right: %.1f\n",
-                  baseSpeed, steeringValue, targetSpeed, rightTargetSpeed);
-  } else {
-    server.send(400, "text/plain", "Missing speed or steering parameter");
-  }
-}
-
-// legacy alias if you still hit /control from some old UI
-void handleControl() {
-  if (server.hasArg("speed") && server.hasArg("steering")) {
-    baseSpeed     = server.arg("speed").toFloat();
-    steeringValue = server.arg("steering").toFloat();
-
-    targetSpeed      = -baseSpeed - steeringValue;
-    rightTargetSpeed =  baseSpeed - steeringValue;
-
-    targetSpeed      = constrain(targetSpeed,      -120, 120);
-    rightTargetSpeed = constrain(rightTargetSpeed, -120, 120);
-
-    controlMode = MODE_MANUAL;
-    server.send(200, "text/plain", "OK");
+      "   Steering=" + String(steeringValue));
   } else {
     server.send(400, "text/plain", "Missing speed or steering");
   }
 }
 
-void handleStop() {
-  stopMotor();
-  server.send(200, "text/plain", "Motor stopped");
-  Serial.println("Motor stopped");
+// legacy alias
+void handleControl() {
+  commandCount++;
+  handleSetSpeed();
 }
 
-// PID update – dashboard version
+void handleStop() {
+  commandCount++;
+  stopMotor();
+  controlMode = MODE_MANUAL;
+  
+  server.send(200, "text/plain", "Motor stopped");
+}
+
 void handleSetPID() {
+  commandCount++;
   if (server.hasArg("kp") && server.hasArg("ki") && server.hasArg("kd")) {
     leftPID.Kp = server.arg("kp").toFloat();
     leftPID.Ki = server.arg("ki").toFloat();
     leftPID.Kd = server.arg("kd").toFloat();
-
-    rightPID.Kp = leftPID.Kp;
-    rightPID.Ki = leftPID.Ki;
-    rightPID.Kd = leftPID.Kd;
-
-    leftPID.integral = 0;
+    rightPID = leftPID;
+    leftPID.integral  = 0;
     rightPID.integral = 0;
-
     server.send(200, "text/plain", "PID updated");
-    Serial.printf("PID updated: Kp=%.2f Ki=%.2f Kd=%.3f\n",
-                  leftPID.Kp, leftPID.Ki, leftPID.Kd);
   } else {
     server.send(400, "text/plain", "Missing PID parameters");
   }
 }
 
-// legacy alias (for older UI using /pid)
+// legacy alias
 void handlePID() {
+  commandCount++;
   handleSetPID();
 }
 
-// Status – JSON for dashboard
 void handleStatus() {
   String json = "{";
-  // Base control values
   json += "\"baseSpeed\":" + String(baseSpeed, 1) + ",";
   json += "\"steering\":"  + String(steeringValue, 1) + ",";
 
-  // Left wheel
   json += "\"leftTarget\":"   + String(targetSpeed, 1) + ",";
   json += "\"leftCurrent\":"  + String(currentSpeed, 1) + ",";
   json += "\"leftError\":"    + String(leftPID.error, 1) + ",";
   json += "\"leftPWM\":"      + String((int)leftPID.output) + ",";
   json += "\"leftEncoder\":"  + String(encoderCount) + ",";
 
-  // Right wheel
   json += "\"rightTarget\":"   + String(rightTargetSpeed, 1) + ",";
   json += "\"rightCurrent\":"  + String(rightCurrentSpeed, 1) + ",";
   json += "\"rightError\":"    + String(rightPID.error, 1) + ",";
   json += "\"rightPWM\":"      + String((int)rightPID.output) + ",";
   json += "\"rightEncoder\":"  + String(rightEncoderCount) + ",";
 
-  // Extra useful fields (not used by current JS, but harmless)
   json += "\"front\":"   + String(frontDistance) + ",";
   json += "\"right1\":"  + String(rightDistance1) + ",";
   json += "\"right2\":"  + String(rightDistance2) + ",";
   json += "\"yaw\":"     + String(currentAngle, 1) + ",";
   json += "\"mode\":"    + String((int)controlMode) + ",";
   json += "\"vx\":"      + String((int)robotX) + ",";
-  json += "\"vy\":"      + String((int)robotY);
+  json += "\"vy\":"      + String((int)robotY) + ",";
+  json += "\"desiredYaw\":" + String(desiredHeading * 180.0f / (float)M_PI, 1) + ",";
 
+  json += "\"paused\":" + String(queuePaused ? 1 : 0) + ",";
+  json += "\"queue\":[";
+  for (size_t i = 0; i < nodeQueue.size(); ++i) {
+    json += String(nodeQueue[i]);
+    if (i + 1 < nodeQueue.size()) json += ",";
+  }
+  json += "]";
   json += "}";
   server.send(200, "application/json", json);
 }
 
-// ---- WALL / MODE / VIVE API (unchanged) ----
 void handleWallEnable() {
+  commandCount++;
   if (server.hasArg("enable")) {
     bool enable = (server.arg("enable") == "1" || server.arg("enable") == "true");
     wallFollowMode = enable;
     controlMode    = enable ? MODE_WALL : MODE_MANUAL;
     if (enable) {
       lastDistError = 0;
-      resetYaw();
+      lastWallFollowUpdate = 0;
       currentState = STATE_WALL_FOLLOW;
     } else {
       stopMotor();
@@ -629,6 +1000,7 @@ void handleWallEnable() {
 }
 
 void handleWallGoals() {
+  commandCount++;
   if (server.hasArg("frontGoal"))  frontGoalDistance   = server.arg("frontGoal").toInt();
   if (server.hasArg("rightGoal1")) rightGoalDistance1  = server.arg("rightGoal1").toInt();
   if (server.hasArg("rightGoal2")) rightGoalDistance2  = server.arg("rightGoal2").toInt();
@@ -636,59 +1008,246 @@ void handleWallGoals() {
 }
 
 void handleWallPD() {
+  commandCount++;
   if (server.hasArg("kp")) wallFollowKp = server.arg("kp").toFloat();
   if (server.hasArg("kd")) wallFollowKd = server.arg("kd").toFloat();
+  if (server.hasArg("kpa"))wallAngleKp  = server.arg("kpa").toFloat();
   server.send(200, "text/plain", "Wall PD updated");
 }
 
 void handleMode() {
+  commandCount++;
   if (!server.hasArg("m")) {
     server.send(400, "text/plain", "Missing m");
     return;
   }
   String m = server.arg("m");
-  if (m == "manual") controlMode = MODE_MANUAL;
-  else if (m == "wall") { controlMode = MODE_WALL; wallFollowMode = true; }
-  else if (m == "vive") controlMode = MODE_VIVE;
+  if (m == "manual") {
+    controlMode   = MODE_MANUAL;
+    wallFollowMode = false;
+    currentState  = STATE_IDLE;
+    stopMotor();
+    robotX = 0; robotY = 0;
+  } else if (m == "wall") {
+    controlMode    = MODE_WALL;
+    wallFollowMode = true;
+    lastDistError  = 0;
+    lastWallFollowUpdate = 0;
+    currentState = STATE_WALL_FOLLOW;
+  } else if (m == "vive") {
+    controlMode    = MODE_VIVE;
+    wallFollowMode = false;
+    currentState   = STATE_IDLE;
+  }
   server.send(200, "text/plain", "OK");
 }
 
 void handleGoToPoint() {
-  if (server.hasArg("x") && server.hasArg("y")) {
-    viveTargetX = server.arg("x").toInt();
-    viveTargetY = server.arg("y").toInt();
-    viveNavigationMode = true;
-    controlMode = MODE_VIVE;
-    server.send(200, "text/plain", "Moving");
-  } else {
+  commandCount++;
+  if (!server.hasArg("x") || !server.hasArg("y")) {
     server.send(400, "text/plain", "Missing x or y");
+    return;
+  }
+  int x = server.arg("x").toInt();
+  int y = server.arg("y").toInt();
+  bool isDead = server.arg("dead") == "1" || server.arg("dead") == "true";
+  
+  // Push into XY queue (FIFO)
+  xyQueue.push_back({x, y, isDead});
+
+  // Ensure VIVE mode processes queue
+  controlMode = MODE_VIVE;
+  coordViveMode = true; // using coordinate navigation
+
+  server.send(200, "text/plain", "GoToPoint added to queue.");
+}
+
+// BFS route API: /route?goal=Y[&start=X]
+void handleRoute() {
+  if (!server.hasArg("goal")) {
+    server.send(400, "text/plain", "Missing goal");
+    return;
+  }
+  int start = -1;
+  int goal  = server.arg("goal").toInt();
+
+  if ((robotX <= 0 || robotY <= 0) && nodeQueue.empty()) {
+    server.send(200, "text/plain", "Invalid pose: robotX/robotY <= 0");
+    return;
+  }
+  if (!vivePoseValid() && nodeQueue.empty()) {
+    server.send(200, "text/plain", "Vive invalid (0,0). Cannot compute start node.");
+    return;
+  }
+
+  if (!nodeQueue.empty()) {
+    start = nodeQueue.back();
+  } else {
+    if (server.hasArg("start")) {
+      start = server.arg("start").toInt();
+    } else {
+      if (!vivePoseValid()) {
+        server.send(200, "text/plain", "Vive invalid. Provide explicit start.");
+        return;
+      }
+      if (robotX <= 0 || robotY <= 0) {
+        server.send(200, "text/plain", "Invalid pose: robotX/robotY <= 0");
+        return;
+      }
+      start = findNearestNode(robotX, robotY);
+    }
+  }
+
+  if (start < 0) {
+    server.send(200, "text/plain", "No valid start node");
+    return;
+  }
+
+  std::vector<int> route = graph.bfs(start, goal);
+  if (route.empty()) {
+    server.send(200, "text/plain", "NO ROUTE FOUND");
+    return;
+  }
+
+  size_t beginIndex = 0;
+  if (!nodeQueue.empty() && nodeQueue.back() == route[0]) {
+    beginIndex = 1;
+  }
+  for (size_t i = beginIndex; i < route.size(); ++i) {
+    nodeQueue.push_back(route[i]);
+  }
+
+  controlMode = MODE_VIVE;
+  coordViveMode = false;
+
+  String s = "[";
+  for (size_t i = 0; i < nodeQueue.size(); ++i) {
+    s += String(nodeQueue[i]);
+    if (i + 1 < nodeQueue.size()) s += ",";
+  }
+  s += "]";
+  server.send(200, "application/json", s);
+}
+
+void handleQueueClear() {
+  commandCount++;
+  nodeQueue.clear();
+  stopMotor();
+  server.send(200, "text/plain", "Queue cleared");
+}
+
+void handleQueueSkip() {
+  commandCount++;
+  if (!nodeQueue.empty()) {
+    int skipped = nodeQueue.front();
+    nodeQueue.erase(nodeQueue.begin());
+    String msg = "Skipped node ";
+    msg += skipped;
+    server.send(200, "text/plain", msg);
+  } else {
+    server.send(200, "text/plain", "Queue empty");
   }
 }
 
-// ==================== SETUP ====================
+void handleQueuePause() {
+  commandCount++;
+  if (!server.hasArg("enable")) {
+    server.send(400, "text/plain", "Missing enable");
+    return;
+  }
+  bool enable = (server.arg("enable") == "1" || server.arg("enable") == "true");
+  queuePaused = enable;
+  server.send(200, "text/plain", enable ? "QUEUE PAUSED" : "QUEUE RESUMED");
+}
+void printViveState() {
+    unsigned long now = millis();
+    if (now - lastPrint < PRINT_PERIOD) return;
+    lastPrint = now;
+
+    // ----- POSE -----
+    printf("POSE X,Y = %.1f, %.1f\n", robotX, robotY);
+
+    // ----- Heading -----
+    printf("Heading: %.4f\n", robotHeading);
+
+    // ----- Desired Heading -----
+    printf("Desired: %.4f\n", desiredHeading);
+
+    // ===============================
+    // NODE QUEUE (BFS)
+    // ===============================
+    if (!coordViveMode) {
+        printf("QUEUE: [");
+
+        for (int i = 0; i < (int)nodeQueue.size(); i++) {
+            if (i < (int)nodeQueue.size() - 1)
+                printf("%d,", nodeQueue[i]);
+            else
+                printf("%d", nodeQueue[i]);
+        }
+
+        printf("]\n");
+    }
+
+    // ===============================
+    // XY QUEUE (Go-To-Point)
+    // ===============================
+    else {
+        printf("XYQ: [");
+
+        for (int i = 0; i < (int)xyQueue.size(); i++) {
+            printf("(%d,%d,%c)", 
+                  xyQueue[i].x,
+                  xyQueue[i].y,
+                  xyQueue[i].isDead ? 'D' : 'N');
+
+            if (i < (int)xyQueue.size() - 1)
+                printf(" - ");
+        }
+
+        printf("]\n");
+    }
+
+}
+
+
+
+// ========== SETUP ==========
 void setup() {
   Serial.begin(115200);
-  delay(300);
 
-  // PWM
   pinMode(MOTOR_RPWM, OUTPUT);
   pinMode(MOTOR_LPWM, OUTPUT);
   pinMode(RIGHT_MOTOR_RPWM, OUTPUT);
   pinMode(RIGHT_MOTOR_LPWM, OUTPUT);
+
   ledcAttach(MOTOR_RPWM,       PWM_FREQ, PWM_RESOLUTION);
   ledcAttach(MOTOR_LPWM,       PWM_FREQ, PWM_RESOLUTION);
   ledcAttach(RIGHT_MOTOR_RPWM, PWM_FREQ, PWM_RESOLUTION);
   ledcAttach(RIGHT_MOTOR_LPWM, PWM_FREQ, PWM_RESOLUTION);
 
-  // Encoders
+  ledcWrite(MOTOR_RPWM, 0);
+  ledcWrite(MOTOR_LPWM, 0);
+  ledcWrite(RIGHT_MOTOR_RPWM, 0);
+  ledcWrite(RIGHT_MOTOR_LPWM, 0);
+
   pinMode(ENCODER_A,       INPUT_PULLUP);
   pinMode(ENCODER_B,       INPUT_PULLUP);
   pinMode(RIGHT_ENCODER_A, INPUT_PULLUP);
   pinMode(RIGHT_ENCODER_B, INPUT_PULLUP);
+
   attachInterrupt(digitalPinToInterrupt(ENCODER_A),       encoderISR,      RISING);
   attachInterrupt(digitalPinToInterrupt(RIGHT_ENCODER_A), rightEncoderISR, RISING);
 
-  // WiFi
+  // // WiFi with static IP
+  // IPAddress local_IP(192, 168, 1, 111);
+  // IPAddress gateway(192, 168, 1, 1);
+  // IPAddress subnet(255, 255, 255, 0);
+
+  // if (!WiFi.config(local_IP, gateway, subnet)) {
+  //   Serial.println("Failed to configure static IP");
+  // }
+
   WiFi.begin(ssid, password);
   Serial.print("Connecting to WiFi ");
   Serial.println(ssid);
@@ -705,56 +1264,43 @@ void setup() {
   } else {
     Serial.println("WiFi connection failed");
   }
-
-  // HTTP routes
   server.on("/",            handleRoot);
-
-  // manual control APIs expected by website.h
   server.on("/setspeed",    handleSetSpeed);
+  server.on("/control",     handleControl);
   server.on("/stop",        handleStop);
   server.on("/setpid",      handleSetPID);
-  server.on("/status",      handleStatus);
-
-  // legacy / alternate endpoints
-  server.on("/control",     handleControl);
   server.on("/pid",         handlePID);
-
-  // wall / vive APIs
+  server.on("/status",      handleStatus);
   server.on("/wall/enable", handleWallEnable);
   server.on("/wall/goals",  handleWallGoals);
   server.on("/wall/pd",     handleWallPD);
   server.on("/mode",        handleMode);
   server.on("/gotopoint",   handleGoToPoint);
-
+  server.on("/route",       handleRoute);
+  server.on("/queue/clear", handleQueueClear);
+  server.on("/queue/skip",  handleQueueSkip);
+  server.on("/queue/pause", handleQueuePause);
   server.begin();
 
-  // I2C + sensors
   Wire.begin(I2C_SDA, I2C_SCL);
 
-  pinMode(TOF_XSHUT_FRONT, OUTPUT);
-  pinMode(TOF_XSHUT_RIGHT, OUTPUT);
-  pinMode(TOF_XSHUT_RIGHT2, OUTPUT);
-  digitalWrite(TOF_XSHUT_FRONT, HIGH);
-  digitalWrite(TOF_XSHUT_RIGHT, HIGH);
-  digitalWrite(TOF_XSHUT_RIGHT2, HIGH);
-  delay(10);
+  setMultiplexerBus(TOF_FRONT_BUS);
+  if (!frontTOF.begin()) Serial.println("Front TOF init failed");
+  else                   Serial.println("Front TOF OK");
 
-  if (!frontTOF.begin()) {
-    Serial.println("VL53L1X front init failed!");
-  } else {
-    frontTOF.startRanging();
-    Serial.println("VL53L1X front init success!");
-  }
+  setMultiplexerBus(TOF_SIDE_FRONT_BUS);
+  if (!rightTOF.begin()) Serial.println("Side front TOF init failed");
+  else                   Serial.println("Side front TOF OK");
 
-  if (!rightTOF.begin())  Serial.println("VL53L0X right1 init failed!");
-  if (!right2TOF.begin()) Serial.println("VL53L0X right2 init failed!");
+  setMultiplexerBus(TOF_SIDE_BACK_BUS);
+  if (!right2TOF.begin()) Serial.println("Side back TOF init failed");
+  else                    Serial.println("Side back TOF OK");
 
-  // MPU6050
+  setMultiplexerBus(IMU_BUS);
   if (mpu.begin()) {
     mpu.setAccelerometerRange(MPU6050_RANGE_4_G);
     mpu.setGyroRange(MPU6050_RANGE_500_DEG);
     mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
-    // Calibrate Z offset briefly (assume still)
     sensors_event_t a, g, temp;
     float sum = 0;
     for (int i = 0; i < 50; i++) {
@@ -763,45 +1309,91 @@ void setup() {
       delay(10);
     }
     gyroZOffset = sum / 50.0f;
+    filteredGyroZ = 0.0;
     lastGyroTime = millis();
-    Serial.println("MPU6050 init success!");
+    Serial.println("MPU6050 OK");
   } else {
     Serial.println("MPU6050 not found");
   }
 
-  // Vive sensors
-  viveFront.begin();
-  viveBack.begin();
+  viveLeft.begin();
+  viveRight.begin();
 
   lastSpeedCalc     = millis();
   lastControlUpdate = millis();
+  lastTOFRead       = millis();
+  lastPrint         = millis();
+  lastVive          = millis();
+
+  // Graph nodes (from Code A)
+    // Graph nodes (from Code A)
+  graph.addNode(4150,5200,{1,2,4}); //0
+  graph.addNode(5000,5224,{0,3,4,10}); //1
+  graph.addNode(4220,6030,{0,3,4}); //2
+  graph.addNode(5000,6000,{1,2,4}); //3
+  graph.addNode(4450,6130,{2,3,5}); //4
+  graph.addNode(4420,6370,{4}, true); //5
+
+  graph.addNode(4130,2130,{7,8}); //6
+  graph.addNode(5020,2130,{6,9}); //7
+  graph.addNode(3980,3030,{6,9}); //8
+  graph.addNode(5120,3000, {7,8,10}); //9
+  graph.addNode(5043,4190, {9, 1}); //10
+  // graph.addNode({}); //9
+  // graph.addNode({}); //9
+  // graph.addNode({}); //9
+  
 }
 
-// ==================== LOOP ====================
+// ========== LOOP ==========
 void loop() {
   server.handleClient();
 
-  // Sensors
-  updateGyroIntegration();
   readTOFSensors();
-  readDualVive();
-  computeVivePose();
+  updateGyroIntegration();
 
-  // Mode behaviors
   switch (controlMode) {
     case MODE_MANUAL:
-      // Targets already set by /setspeed or /control
+    if (millis() - lastPrint >= PRINT_PERIOD) {
+        Serial.printf("Control - target left: %.1f, terget right: %.1f -> Left: %.1f, Right: %.1f\n",
+                  targetSpeed, rightTargetSpeed, currentSpeed, rightCurrentSpeed);
+        lastPrint = millis();
+      }
+      robotX = 0;
+      robotY = 0;
       break;
+
     case MODE_WALL:
-      if (wallFollowMode) wallFollowPD();
+      if (wallFollowMode) {
+        updateStateMachine();
+      } else {
+        stopMotor();
+        currentState = STATE_IDLE;
+      }
       break;
+
     case MODE_VIVE:
-      viveGoToPoint();
+      if (millis() - lastVive >= VIVE_READ_PERIOD) {
+        readDualVive();
+        computeVivePose();
+        lastVive = millis();
+      }
+      if (millis() - lastViveMove >= VIVE_MOVE_PERIOD) {
+        if (coordViveMode)
+          followXYQueueStep();
+        else
+          followQueueStep();
+      
+      lastViveMove = millis();
+      }
+      printViveState();
       break;
   }
 
-  if (millis() - lastSpeedCalc >= SPEED_CALC_PERIOD)
+  if (millis() - lastSpeedCalc >= SPEED_CALC_PERIOD) {
     calculateSpeed();
+    lastSpeedCalc = millis();
+  }
 
   if (millis() - lastControlUpdate >= CONTROL_PERIOD) {
     updateMotorControl();

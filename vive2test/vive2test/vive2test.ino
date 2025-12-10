@@ -2,8 +2,8 @@
 #include <math.h>
 
 // ================= PIN SETUP ==================
-#define SIGNALPIN_REAR   1  
-#define SIGNALPIN_FRONT  14  
+#define SIGNALPIN_REAR   5
+#define SIGNALPIN_FRONT  4  
 
 Vive510 viveRear(SIGNALPIN_REAR); 
 Vive510 viveFront(SIGNALPIN_FRONT);
