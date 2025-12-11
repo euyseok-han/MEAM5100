@@ -552,7 +552,7 @@ MODE  : ${data.mode}`;
           document.getElementById("gotoX").value = "";
           document.getElementById("gotoY").value = "";
           document.getElementById("gotoDead").checked = false;
-          document.getElementById("gotoNearestNode").checked = false;
+          document.getElementById("gotoNearestNode").checked = true;
         });
 
       // Switch mode to VIVE automatically
