@@ -1056,7 +1056,7 @@ void handleMode() {
     currentState  = STATE_IDLE;
     stopMotor();
     robotX = 0; robotY = 0;
-    XYQueue.clear();
+    xyQueue.clear();
     nodeQueue.clear();
   } else if (m == "wall") {
     controlMode    = MODE_WALL;
@@ -1075,6 +1075,7 @@ void handleMode() {
 void handleGoToPoint() {
   commandCount++;
   controlMode = MODE_VIVE;
+  readDualVive();
   if (!server.hasArg("x") || !server.hasArg("y")) {
     server.send(400, "text/plain", "Missing x or y");
     return;
@@ -1086,7 +1087,7 @@ void handleGoToPoint() {
 
   // Push into XY queue (FIFO)
   xyQueue.push_back({x, y, isDead});
-  coordViveMode = !isNearest
+  coordViveMode = !isNearest;
   if (isNearest){
     int start = findNearestNode(robotX, robotY);
     int goal = findNearestNode(x, y);
