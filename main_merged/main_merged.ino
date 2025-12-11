@@ -838,7 +838,7 @@ bool viveGoToPointStep() {
   const float DEG2RAD        = (float)M_PI / 180.0f;
   const float TURN_THRESHOLD = viveTargetDead ? (8.0f * DEG2RAD) : (25.0f * DEG2RAD);
   const float TURN_GAIN      = viveTargetDead ? 50.0f : 50.0f;
-  const int   TURN_LIMIT     = viveTargetDead ? 25 : 40;
+  const int   TURN_LIMIT     = viveTargetDead ? 25 : 34;
 
   if (fabs(err) > TURN_THRESHOLD) {
     float turnRaw = err * TURN_GAIN;
@@ -862,7 +862,7 @@ bool viveGoToPointStep() {
   // ---------------------------
   const float SPEED_GAIN = 20.0f;   // dist / 25 gives speed
   float bfsSpeed = dist / SPEED_GAIN;
-  bfsSpeed = constrain((int)bfsSpeed, 30, 80);
+  bfsSpeed = constrain((int)bfsSpeed, 30, 70);
 
   const float STEER_GAIN  = 40.0f;
   const int   STEER_LIMIT = 20.0;
@@ -1609,9 +1609,7 @@ void loop() {
       }
       if(autoWall && !viveDone){
         wallFollowPD();
-        // Serial.println("wall following");
       } else if(!viveDone){
-        // Serial.println("Doing vive");
         if (millis() - lastViveMove >= VIVE_MOVE_PERIOD) {
           followXYQueueStep();
           if (xyQueue.empty()) {
