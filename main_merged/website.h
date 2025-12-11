@@ -215,7 +215,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
           <input type="number" id="bfsStart" min="0" max="40" step="1" placeholder="">  
           <span>Goal Node:</span>
           <input type="number" id="bfsGoal" min="0" max="40" step="1" placeholder="">
-          <button onclick="callRoute()">Add Route</button>
+          <button onclick="callRoute()">BFS("B" key)</button>
         </div>
       </div>
 
@@ -267,7 +267,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
             <h4>Actions</h4>
             <button id="pauseBtn" onclick="toggleQueuePause()" class="queue-btn">Pause</button>
             <button onclick="queueSkip()" class="queue-btn" style="background:#ff9800;">Skip Node</button>
-            <button onclick="queueClear()" class="queue-btn stop-btn">Clear Queue</button>
+            <button onclick="queueClear()" class="queue-btn stop-btn">Clear Queue("C" key)</button>
           </div>
 
             </div>
@@ -290,9 +290,11 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
           <label style="margin-left:10px;">
             <input type="checkbox" id="gotoDead"> Dead(point with a Tower/Nexus)
           </label>
-
+          <label style="margin-left:10px;">
+            <input type="checkbox" id="gotoNearestNode" checked> Nearest Node?
+          </label>
           <button onclick="sendGoToPoint()" class="queue-btn" style="width:auto;padding:6px 14px;background:#007bff;">
-            Go
+            Go("V" key)
           </button>
         </div>
       </div>
@@ -530,6 +532,7 @@ MODE  : ${data.mode}`;
       const x = document.getElementById("gotoX").value;
       const y = document.getElementById("gotoY").value;
       const dead = document.getElementById("gotoDead").checked ? 1 : 0;
+      const nearestNode = document.getElementById("gotoNearestNode").checked ? 1 : 0;
       fetch('/mode?m=vive')
       .then(() => {
         refreshStatus();  // Update mode immediately
@@ -539,7 +542,7 @@ MODE  : ${data.mode}`;
         return;
       }
 
-      const url = `/gotopoint?x=${x}&y=${y}&dead=${dead}`;
+      const url = `/gotopoint?x=${x}&y=${y}&dead=${dead}&nearest=${nearestNode}`;
 
       fetch(url)
         .then(r => r.text())
@@ -549,6 +552,7 @@ MODE  : ${data.mode}`;
           document.getElementById("gotoX").value = "";
           document.getElementById("gotoY").value = "";
           document.getElementById("gotoDead").checked = false;
+          document.getElementById("gotoNearestNode").checked = false;
         });
 
       // Switch mode to VIVE automatically
@@ -606,6 +610,18 @@ MODE  : ${data.mode}`;
         
       if (e.key === "d" || e.key === "D") {
         setControl(currentSpeed, currentSteering);
+        return;
+      }
+      if (e.key === "b" || e.key === "B") {
+        callRoute();
+        return;
+      }
+      if (e.key === "v" || e.key === "V") {
+        sendGoToPoint();
+        return;
+      }
+      if (e.key === "c" || e.key === "C") {
+        queueClear();
         return;
       }
       document.getElementById('speedSlider').value = currentSpeed;

@@ -858,6 +858,7 @@ void followQueueStep() {
   }
   if ( nodeQueue.empty()) {
     stopMotor();
+    coordViveMode = true;
     return;
   }
 
@@ -885,6 +886,7 @@ void followXYQueueStep() {
   }
   if (xyQueue.empty()) {
     stopMotor();
+    coordViveMode = false;
     return;
   }
 
@@ -1072,7 +1074,7 @@ void handleMode() {
 
 void handleGoToPoint() {
   commandCount++;
-  nodeQueue.clear();
+  controlMode = MODE_VIVE;
   if (!server.hasArg("x") || !server.hasArg("y")) {
     server.send(400, "text/plain", "Missing x or y");
     return;
@@ -1080,14 +1082,35 @@ void handleGoToPoint() {
   int x = server.arg("x").toInt();
   int y = server.arg("y").toInt();
   bool isDead = server.arg("dead") == "1" || server.arg("dead") == "true";
-  
+  bool isNearest = server.arg("nearest") == "1" || server.arg("nearest") == "true";
+
   // Push into XY queue (FIFO)
   xyQueue.push_back({x, y, isDead});
+  coordViveMode = !isNearest
+  if (isNearest){
+    int start = findNearestNode(robotX, robotY);
+    int goal = findNearestNode(x, y);
+    std::vector<int> route = graph.bfs(start, goal);
+    if (route.empty()) {
+      server.send(200, "text/plain", "NO ROUTE FOUND, but coord is added to XYqueue");
+      return;
+    }
 
-  // Ensure VIVE mode processes queue
-  controlMode = MODE_VIVE;
-  coordViveMode = true; // using coordinate navigation
+    size_t beginIndex = 0;
+    if (!nodeQueue.empty() && nodeQueue.back() == route[0]) {
+      beginIndex = 1;
+    }
+    for (size_t i = beginIndex; i < route.size(); ++i) {
+      nodeQueue.push_back(route[i]);
+    }
 
+    String s = "[";
+    for (size_t i = 0; i < nodeQueue.size(); ++i) {
+      s += String(nodeQueue[i]);
+      if (i + 1 < nodeQueue.size()) s += ",";
+    }
+    s += "]";
+    }
   server.send(200, "text/plain", "GoToPoint added to queue.");
 }
 
