@@ -100,6 +100,7 @@ Adafruit_VL53L0X right2TOF;
 int frontDistance  = 0;
 int rightDistance1 = 0;
 int rightDistance2 = 0;
+
 // ========== IMU (Code B) ==========
 Adafruit_MPU6050 mpu;
 float currentAngle   = 0;
@@ -142,10 +143,39 @@ unsigned long lastPrint           = 0;
 enum ControlMode {
   MODE_MANUAL = 0,
   MODE_WALL   = 1,
-  MODE_VIVE   = 2
+  MODE_VIVE   = 2,
+  MODE_LOW_TOWER = 3,
+  MODE_HIGH_TOWER = 4,
+  MODE_NEXUS = 5
 };
 ControlMode controlMode = MODE_MANUAL;
 
+// ========== AUTONOMOUS TASKS ==========
+bool autoWall = false;
+bool viveDone = false;
+uint16_t certainCount = 0;
+bool hitNexus = false;
+unsigned long driveForward = 0;
+
+const int LOW_TOWER_Y_THRESHOLD = 5300;
+const int PRE_LOW_TOWER_X = 4610;
+const int PRE_LOW_TOWER_Y = 5150;
+const int LOW_TOWER_X = 4610;
+const int LOW_TOWER_Y = 4900;
+
+const int HIGH_TOWER_Y_THRESHOLD = 3700;
+const int PRE_HIGH_TOWER_X = 2900;
+const int PRE_HIGH_TOWER_Y = 3570;
+const int HIGH_TOWER_X = 2600;
+const int HIGH_TOWER_Y = 3570;
+
+const int NEXUS_Y_THRESHOLD = 4300;
+const int PRE_NEXUS_X = 4580;
+const int PRE_NEXUS_Y = 6050;
+const int NEXUS_X = 4580;
+const int NEXUS_Y = 6500;
+
+// ========== VIVE ==========
 Vive510 viveLeft(VIVE_LEFT_PIN);
 Vive510 viveRight(VIVE_RIGHT_PIN);
 
@@ -171,6 +201,7 @@ float desiredHeading = 0;
 int viveTargetX      = 0;
 int viveTargetY      = 0;
 
+// ========== TIMING ==========
 unsigned long lastControlUpdate = 0;
 unsigned long lastSpeedCalc     = 0;
 unsigned long lastTOFRead       = 0;
@@ -185,6 +216,7 @@ const unsigned long PRINT_PERIOD      = 1000;
 const unsigned long VIVE_READ_PERIOD       = 8;
 const unsigned long VIVE_MOVE_PERIOD       = 30;
 bool coordViveMode = false;
+
 // ========== GRAPH + BFS (Code A) ==========
 class Node {
 public:
@@ -258,8 +290,6 @@ float normalizeAngle(float a) {
   while (a >  M_PI) a -= 2 * M_PI;
   while (a < -M_PI) a += 2 * M_PI;
   return a;
-
-
 }
 
 uint16_t median7(uint16_t a, uint16_t b, uint16_t c, uint16_t d, uint16_t e, uint16_t f, uint16_t g) {
@@ -276,8 +306,6 @@ uint16_t median7(uint16_t a, uint16_t b, uint16_t c, uint16_t d, uint16_t e, uin
   return arr[3];
 }
 uint16_t filterVive(uint16_t raw, ViveBuffer &v) {
-
-    
     if (v.count < 7) {
         v.buf[v.count++] = raw;
 
@@ -764,6 +792,10 @@ void hitTower(){
     rawSetMotorPWM(-hitSpeed, RIGHT_MOTOR);
     delay(150);
   }
+  rawSetMotorPWM(0, LEFT_MOTOR);
+  rawSetMotorPWM(0, RIGHT_MOTOR);
+
+  hitNexus = true;
   rawStopMotor();
 }
 bool viveGoToPointStep() {
@@ -900,7 +932,7 @@ void followXYQueueStep() {
   uint8_t correctThreshold = viveTargetDead ? 4 : 0;
   if (correctTime > correctThreshold) {
     xyQueue.pop_front();
-    if (viveTargetDead) hitTower();
+    // if (viveTargetDead) hitTower();
   }
 }
 
@@ -1072,6 +1104,58 @@ void handleMode() {
   server.send(200, "text/plain", "OK");
 }
 
+// ======================= ATTACK HANDLER ============================
+void handleAttack() {
+  commandCount++;
+
+  if (!server.hasArg("target")) {
+    server.send(400, "text/plain", "Missing target");
+    return;
+  }
+
+  String t = server.arg("target");
+
+  // Clear queues so attack mode takes over immediately
+  nodeQueue.clear();
+  xyQueue.clear();
+  queuePaused = false;
+
+  // Reset motion
+  stopMotor();
+  viveDone = false;
+  autoWall = true;
+  coordViveMode = true;   // attacks always use coordinate navigation
+  wasBackward = false;
+  certainCount = 0;
+
+  if (t == "lowtower") {
+    Serial.println("Attacking low tower");
+    controlMode = MODE_LOW_TOWER;
+    xyQueue.push_back({PRE_LOW_TOWER_X, PRE_LOW_TOWER_Y, false});
+    xyQueue.push_back({LOW_TOWER_X, LOW_TOWER_Y, true});
+    server.send(200, "text/plain", "Mode set: LOW TOWER");
+  }
+  else if (t == "hightower") {
+    Serial.println("Attacking high tower");
+    controlMode = MODE_HIGH_TOWER;
+    xyQueue.push_back({PRE_HIGH_TOWER_X, PRE_HIGH_TOWER_Y, false});
+    xyQueue.push_back({HIGH_TOWER_X, HIGH_TOWER_Y, true});
+    server.send(200, "text/plain", "Mode set: HIGH TOWER");
+  }
+  else if (t == "nexus") {
+    Serial.println("Attacking nexus");
+    controlMode = MODE_NEXUS;
+    hitNexus = false;
+    xyQueue.push_back({PRE_NEXUS_X, PRE_NEXUS_Y, false});
+    xyQueue.push_back({NEXUS_X, NEXUS_Y, true});
+    server.send(200, "text/plain", "Mode set: NEXUS");
+  }
+  else {
+    server.send(400, "text/plain", "Unknown attack target");
+  }
+}
+
+
 void handleGoToPoint() {
   commandCount++;
   controlMode = MODE_VIVE;
@@ -1219,6 +1303,7 @@ void handleQueuePause() {
   queuePaused = enable;
   server.send(200, "text/plain", enable ? "QUEUE PAUSED" : "QUEUE RESUMED");
 }
+
 void printViveState() {
     unsigned long now = millis();
     if (now - lastPrint < PRINT_PERIOD) return;
@@ -1340,6 +1425,7 @@ void setup() {
   server.on("/queue/clear", handleQueueClear);
   server.on("/queue/skip",  handleQueueSkip);
   server.on("/queue/pause", handleQueuePause);
+  server.on("/attack",      handleAttack);
   server.begin();
 
   Wire.begin(I2C_SDA, I2C_SCL);
@@ -1447,6 +1533,120 @@ void loop() {
       lastViveMove = millis();
       }
       printViveState();
+      break;
+
+    case MODE_LOW_TOWER:
+      if (millis() - lastVive >= VIVE_READ_PERIOD) {
+        readDualVive();
+        computeVivePose();
+        lastVive = millis();
+      }
+      if(robotY > LOW_TOWER_Y_THRESHOLD - 100){
+        certainCount++
+      }
+      if(certainCount > 5 && robotY > LOW_TOWER_Y_THRESHOLD){
+        autoWall = false;
+      }
+      if(autoWall){
+        wallFollowPD();
+        // Serial.println("wall following");
+      } else if(!viveDone){
+        if (millis() - lastViveMove >= VIVE_MOVE_PERIOD) {
+          followXYQueueStep();
+          if (xyQueue.empty()) {
+            viveDone = true;
+            driveForward = millis();
+          }
+          lastViveMove = millis();
+        }
+      } else{
+        if(millis() - driveForward < 3000){
+          targetSpeed = 30;
+          rightTargetSpeed = 30;
+        } else {
+          controlMode   = MODE_MANUAL;
+          wallFollowMode = false;
+          currentState  = STATE_IDLE;
+          stopMotor();
+          robotX = 0; robotY = 0;
+        }
+      }
+      break;
+
+    case MODE_HIGH_TOWER:
+      if (millis() - lastVive >= VIVE_READ_PERIOD) {
+        readDualVive();
+        computeVivePose();
+        lastVive = millis();
+      }
+      if(robotY > 4800 && robotY < 5200){
+        certainCount++;
+      }
+      if(certainCount > 10 && robotY < HIGH_TOWER_Y_THRESHOLD){
+        autoWall = false;
+      }
+      if(autoWall){
+        wallFollowPD();
+        // Serial.println("wall following");
+      } else if(!viveDone){
+        // Serial.println("Doing vive");
+        if (millis() - lastViveMove >= VIVE_MOVE_PERIOD) {
+          followXYQueueStep();
+          if (xyQueue.empty()) {
+            viveDone = true;
+            driveForward = millis();
+          }
+          lastViveMove = millis();
+        }
+      } else{
+        if(millis() - driveForward < 3000){
+          targetSpeed = 30;
+          rightTargetSpeed = 30;
+        } else {
+          controlMode   = MODE_MANUAL;
+          wallFollowMode = false;
+          currentState  = STATE_IDLE;
+          stopMotor();
+          robotX = 0; robotY = 0;
+        }
+      }
+      break;
+
+    case MODE_NEXUS:
+      if (millis() - lastVive >= VIVE_READ_PERIOD) {
+        readDualVive();
+        computeVivePose();
+        lastVive = millis();
+      }
+      if(robotY > NEXUS_Y_THRESHOLD - 100){
+        certainCount++;
+      }
+      if(certainCount > 5 && robotY > NEXUS_Y_THRESHOLD){
+        autoWall = false;
+      }
+      if(autoWall){
+        wallFollowPD();
+        // Serial.println("wall following");
+      } else if(!viveDone){
+        if (millis() - lastViveMove >= VIVE_MOVE_PERIOD) {
+          followXYQueueStep();
+          if (xyQueue.empty()) {
+            viveDone = true;
+            driveForward = millis();
+          }
+          lastViveMove = millis();
+        }
+      } else{
+        if(!hitNexus){
+          hitTower();
+        } else {
+          controlMode   = MODE_MANUAL;
+          wallFollowMode = false;
+          currentState  = STATE_IDLE;
+          stopMotor();
+          robotX = 0; robotY = 0;
+        }
+      }
       break;
   }
 

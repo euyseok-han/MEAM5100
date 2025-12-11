@@ -300,6 +300,18 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       </div>
       </div>
 
+      <!-- ROW 4: ATTACK BUTTONS -->
+      <div class="panel attack-section" style="
+          background:#ffe6e6;
+          display:flex;
+          justify-content:space-between;
+          align-items:center;
+          gap:12px;
+      ">
+        <button onclick="attackLowTower()"  style="flex:1; padding:14px;">Attack Low Tower</button>
+        <button onclick="attackHighTower()" style="flex:1; padding:14px;">Attack High Tower</button>
+        <button onclick="attackNexus()"     style="flex:1; padding:14px;">Attack Nexus</button>
+      </div>
     </div>
   </div>
 
@@ -589,6 +601,19 @@ MODE  : ${data.mode}`;
           refreshStatus();
         });
     }
+
+    function attackLowTower() {
+      fetch('/attack?target=lowtower');
+    }
+
+    function attackHighTower() {
+      fetch('/attack?target=hightower');
+    }
+
+    function attackNexus() {
+      fetch('/attack?target=nexus');
+    }
+
     document.addEventListener('keydown', (e) => {
       if (e.key === 'ArrowUp') {
         currentSpeed = Math.min(120, currentSpeed + 10);
