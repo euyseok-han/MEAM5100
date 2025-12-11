@@ -1542,7 +1542,7 @@ void loop() {
         lastVive = millis();
       }
       if(robotY > LOW_TOWER_Y_THRESHOLD - 100){
-        certainCount++
+        certainCount++;
       }
       if(certainCount > 5 && robotY > LOW_TOWER_Y_THRESHOLD){
         autoWall = false;
@@ -1582,7 +1582,7 @@ void loop() {
       if(robotY > 4800 && robotY < 5200){
         certainCount++;
       }
-      if(certainCount > 10 && robotY < HIGH_TOWER_Y_THRESHOLD){
+      if(certainCount > 7 && robotY < HIGH_TOWER_Y_THRESHOLD){
         autoWall = false;
       }
       if(autoWall){
