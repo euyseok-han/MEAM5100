@@ -45,6 +45,7 @@
 #define TOF_SIDE_FRONT_BUS 1
 #define TOF_SIDE_BACK_BUS  2
 #define IMU_BUS            3
+#define TOP_HAT_BUS        4
 
 // Vive trackers (Code A style: left/right)
 #define VIVE_LEFT_PIN      4
@@ -210,6 +211,7 @@ unsigned long lastSpeedCalc     = 0;
 unsigned long lastTOFRead       = 0;
 unsigned long lastVive          = 0;
 unsigned long lastViveMove      = 0;
+unsigned long topHatUpdate      = 0;
 
 const unsigned long CONTROL_PERIOD    = 2;
 const unsigned long SPEED_CALC_PERIOD = 2;
@@ -1478,6 +1480,7 @@ void setup() {
   lastTOFRead       = millis();
   lastPrint         = millis();
   lastVive          = millis();
+  topHatUpdate      = millis();
 
   // Graph nodes (from Code A)
     // Graph nodes (from Code A)
@@ -1498,6 +1501,25 @@ void setup() {
 // ========== LOOP ==========
 void loop() {
   server.handleClient();
+  if(millis() - topHatUpdate > 500){
+    setMultiplexerBus(TOP_HAT_BUS);
+    Wire.write(commandCount);
+    Wire.endTransmission();
+    commandCount = 0;
+
+    Wire.requestFrom(0x70, 1);
+    uint8_t health = 1;
+    while(Wire.available()){
+      health = Wire.read();
+      Serial.print("Health: ");
+      Serial.println(health);
+    }
+    // Robot is dead
+    if(health == 0){
+      stopMotor();
+    }
+    topHatUpdate = millis();
+  }
 
   readTOFSensors();
   updateGyroIntegration();
