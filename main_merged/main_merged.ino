@@ -156,23 +156,23 @@ bool viveDone = false;
 bool hitNexus = false;
 unsigned long driveForward = 0;
 
-const int LOW_TOWER_Y_THRESHOLD = 5000;
-const int PRE_LOW_TOWER_X = 0;
-const int PRE_LOW_TOWER_Y = 0;
-const int LOW_TOWER_X = 0;
-const int LOW_TOWER_Y = 0;
+const int LOW_TOWER_Y_THRESHOLD = 5300;
+const int PRE_LOW_TOWER_X = 4610;
+const int PRE_LOW_TOWER_Y = 5150;
+const int LOW_TOWER_X = 4610;
+const int LOW_TOWER_Y = 4900;
 
-const int HIGH_TOWER_Y_THRESHOLD = 3000;
-const int PRE_HIGH_TOWER_X = 0;
-const int PRE_HIGH_TOWER_Y = 0;
-const int HIGH_TOWER_X = 0;
-const int HIGH_TOWER_Y = 0;
+const int HIGH_TOWER_Y_THRESHOLD = 3700;
+const int PRE_HIGH_TOWER_X = 2900;
+const int PRE_HIGH_TOWER_Y = 3570;
+const int HIGH_TOWER_X = 2600;
+const int HIGH_TOWER_Y = 3570;
 
-const int NEXUS_Y_THRESHOLD = 5000;
-const int PRE_NEXUS_X = 0;
-const int PRE_NEXUS_Y = 0;
-const int NEXUS_X = 0;
-const int NEXUS_Y;
+const int NEXUS_Y_THRESHOLD = 4300;
+const int PRE_NEXUS_X = 4580;
+const int PRE_NEXUS_Y = 6050;
+const int NEXUS_X = 4580;
+const int NEXUS_Y = 6500;
 
 // ========== VIVE ==========
 Vive510 viveLeft(VIVE_LEFT_PIN);
@@ -1360,6 +1360,7 @@ void setup() {
   server.on("/queue/clear", handleQueueClear);
   server.on("/queue/skip",  handleQueueSkip);
   server.on("/queue/pause", handleQueuePause);
+  server.on("/attack",      handleAttack);
   server.begin();
 
   Wire.begin(I2C_SDA, I2C_SCL);
@@ -1543,7 +1544,7 @@ void loop() {
         computeVivePose();
         lastVive = millis();
       }
-      if(robotY > NEXUS_Y_THESHOLD){
+      if(robotY > NEXUS_Y_THRESHOLD){
         autoWall = false;
       }
       if(autoWall){
