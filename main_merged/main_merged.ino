@@ -59,7 +59,7 @@ volatile uint32_t commandCount = 0;
 // ========== CONTROL CONSTANTS ==========
 const int   PWM_FREQ           = 5000;
 const int   PWM_RESOLUTION     = 8;
-const float GOAL_REACHED_THRESHOLD = 150.0f; // mm radius for BFS nodes
+const float GOAL_REACHED_THRESHOLD = 180.0f; // mm radius for BFS nodes
 
 // ========== MOTOR & ENCODER ==========
 volatile long encoderCount      = 0;
@@ -112,9 +112,9 @@ float       filteredGyroZ = 0.0;
 
 // ========== WALL FOLLOW (Code B) ==========
 bool  wallFollowMode      = false;
-int   frontGoalDistance   = 150;
-int   rightGoalDistance1  = 100;
-int   rightGoalDistance2  = 100;
+int   frontGoalDistance   = 100;
+int   rightGoalDistance1  = 60;
+int   rightGoalDistance2  = 60;
 float wallFollowSpeed     = 40;
 
 float lastDistError       = 0;
@@ -177,13 +177,13 @@ unsigned long lastTOFRead       = 0;
 unsigned long lastVive          = 0;
 unsigned long lastViveMove      = 0;
 
-const unsigned long CONTROL_PERIOD    = 60;
-const unsigned long SPEED_CALC_PERIOD = 50;
+const unsigned long CONTROL_PERIOD    = 2;
+const unsigned long SPEED_CALC_PERIOD = 2;
 const unsigned long TOF_READ_PERIOD   = 50;
 const unsigned long IMU_READ_PERIOD   = 50;
 const unsigned long PRINT_PERIOD      = 1000;
-const unsigned long VIVE_READ_PERIOD       = 80;
-const unsigned long VIVE_MOVE_PERIOD       = 160;
+const unsigned long VIVE_READ_PERIOD       = 8;
+const unsigned long VIVE_MOVE_PERIOD       = 30;
 bool coordViveMode = false;
 // ========== GRAPH + BFS (Code A) ==========
 class Node {
@@ -404,6 +404,20 @@ void rawSetMotorPWM(int pwm, int motorSide) {
 }
 
 void stopMotor() {
+  targetSpeed        = 0;
+  rightTargetSpeed   = 0;
+  baseSpeed          = 0;
+  steeringValue      = 0;
+  leftPID.integral   = 0;
+  leftPID.lastError  = 0;
+  rightPID.integral  = 0;
+  rightPID.lastError = 0;
+}
+
+void rawStopMotor() {
+  rawSetMotorPWM(0, LEFT_MOTOR);
+  rawSetMotorPWM(0, RIGHT_MOTOR);
+
   targetSpeed        = 0;
   rightTargetSpeed   = 0;
   baseSpeed          = 0;
@@ -744,16 +758,14 @@ void hitTower(){
   for (int k = 0; k < hitTimes; k++) {
     rawSetMotorPWM( hitSpeed, LEFT_MOTOR);
     rawSetMotorPWM( hitSpeed, RIGHT_MOTOR);
-    if (k == 0) delay(600);
-    else delay(350);
+    if (k == 0) delay(900);
+    else delay(400);
     rawSetMotorPWM(-hitSpeed, LEFT_MOTOR);
     rawSetMotorPWM(-hitSpeed, RIGHT_MOTOR);
     delay(150);
   }
-  rawSetMotorPWM(0, LEFT_MOTOR);
-  rawSetMotorPWM(0, RIGHT_MOTOR);
+  rawStopMotor();
 }
-
 bool viveGoToPointStep() {
   if (!leftValid || !rightValid) {
     stopMotor();
@@ -764,15 +776,17 @@ bool viveGoToPointStep() {
     return false;
   }
 
+  // ---------------------------
+  // Compute vector to target
+  // ---------------------------
   float dx = (float)viveTargetX - robotX;
   float dy = (float)viveTargetY - robotY;
   float dist = sqrtf(dx * dx + dy * dy);
 
-  if (!viveTargetDead){
-    if (dist < GOAL_REACHED_THRESHOLD) {
-      stopMotor();
-      return true;
-    }
+  // If target is NOT dead point, stop when close enough
+  if (!viveTargetDead && dist < GOAL_REACHED_THRESHOLD) {
+    rawStopMotor();
+    return true;
   }
   float desiredForward  = atan2f(dy, dx);
   float desiredBackward = desiredForward + (float)M_PI;
@@ -783,43 +797,53 @@ bool viveGoToPointStep() {
   wasBackward = (fabs(errB) < fabs(errF));
   float err = wasBackward ? errB : errF;
   desiredHeading = wasBackward ? desiredBackward : desiredForward;
-
+  // ---------------------------
+  // ALIGNMENT
+  // ---------------------------
   const float DEG2RAD        = (float)M_PI / 180.0f;
-  const float TURN_THRESHOLD = viveTargetDead ? (5.0f * DEG2RAD) : (40.0f * DEG2RAD);
-  const float TURN_GAIN      = viveTargetDead ? 20.0f : 35.0f;
-  const int   TURN_LIMIT     = viveTargetDead ? 20 : 40;
+  const float TURN_THRESHOLD = viveTargetDead ? (8.0f * DEG2RAD) : (25.0f * DEG2RAD);
+  const float TURN_GAIN      = viveTargetDead ? 50.0f : 50.0f;
+  const int   TURN_LIMIT     = viveTargetDead ? 25 : 40;
 
-  bool alignNeeded = fabs(err) > TURN_THRESHOLD;
-  if (alignNeeded) {
+  if (fabs(err) > TURN_THRESHOLD) {
     float turnRaw = err * TURN_GAIN;
+    if (25 > turnRaw >= 0) turnRaw = 25;
+    if (-25 < turnRaw < 0) turnRaw = -25;
     float turn    = constrain((int)turnRaw, -TURN_LIMIT, TURN_LIMIT);
-    targetSpeed      = -turn;
-    rightTargetSpeed =  turn;
-    return false;
+    rawSetMotorPWM( -turn, LEFT_MOTOR);
+    rawSetMotorPWM( turn, RIGHT_MOTOR);
+    return false;  // still turning
+    Serial.print("TURNING");
+    Serial.println(turn);
   }
-  
+
   if (viveTargetDead) {
-    stopMotor();
+    rawStopMotor();
     return true;
   }
-  const float SPEED_GAIN = 25.0f;
-  float bfsSpeed = dist / SPEED_GAIN; // if dist is like 500, it like 25. If 2000, should be 80
-  bfsSpeed = constrain((int)bfsSpeed, 25, 100);
-  const float STEER_GAIN  = 10.0f; // if err is like 30deg(0.5rad), steer is like 5
-  const int   STEER_LIMIT = 30;
+
+  // ---------------------------
+  // FORWARD DRIVE TOWARD TARGET
+  // ---------------------------
+  const float SPEED_GAIN = 20.0f;   // dist / 25 gives speed
+  float bfsSpeed = dist / SPEED_GAIN;
+  bfsSpeed = constrain((int)bfsSpeed, 30, 80);
+
+  const float STEER_GAIN  = 30.0f;
+  const int   STEER_LIMIT = 10.0;
   float steerRaw = err * STEER_GAIN;
   float steer    = constrain((int)steerRaw, -STEER_LIMIT, STEER_LIMIT);
 
-  if (wasBackward) {
-    bfsSpeed = -bfsSpeed;
-    steer = steer;
-  }
+  if (wasBackward) bfsSpeed = -bfsSpeed;  
+
+  // Compute wheel commands
   float leftCmd  = bfsSpeed - steer;
   float rightCmd = bfsSpeed + steer;
-
-  targetSpeed      = leftCmd;
-  rightTargetSpeed = rightCmd;
-
+  rawSetMotorPWM(leftCmd, LEFT_MOTOR);
+  rawSetMotorPWM( rightCmd, RIGHT_MOTOR);
+  Serial.print("going left/right speed:" );
+  Serial.print(leftCmd);
+  Serial.println(rightCmd);
   return false;
 }
 
@@ -834,6 +858,7 @@ void followQueueStep() {
   }
   if ( nodeQueue.empty()) {
     stopMotor();
+    coordViveMode = true;
     return;
   }
 
@@ -843,7 +868,8 @@ void followQueueStep() {
   viveTargetDead = graph.nodes[currentNode].dead;
   if (viveGoToPointStep()) correctTime ++;
   else correctTime = 0;
-  if (correctTime > 5) {
+  uint8_t correctThreshold = viveTargetDead ? 4 : 0;
+  if (correctTime > correctThreshold) {
     if (viveTargetDead) {
       hitTower();
     }
@@ -860,6 +886,7 @@ void followXYQueueStep() {
   }
   if (xyQueue.empty()) {
     stopMotor();
+    coordViveMode = false;
     return;
   }
 
@@ -870,7 +897,8 @@ void followXYQueueStep() {
 
   if (viveGoToPointStep()) correctTime ++;
   else correctTime = 0;
-  if (correctTime > 5) {
+  uint8_t correctThreshold = viveTargetDead ? 4 : 0;
+  if (correctTime > correctThreshold) {
     xyQueue.pop_front();
     if (viveTargetDead) hitTower();
   }
@@ -1028,6 +1056,8 @@ void handleMode() {
     currentState  = STATE_IDLE;
     stopMotor();
     robotX = 0; robotY = 0;
+    XYQueue.clear();
+    nodeQueue.clear();
   } else if (m == "wall") {
     controlMode    = MODE_WALL;
     wallFollowMode = true;
@@ -1044,6 +1074,7 @@ void handleMode() {
 
 void handleGoToPoint() {
   commandCount++;
+  controlMode = MODE_VIVE;
   if (!server.hasArg("x") || !server.hasArg("y")) {
     server.send(400, "text/plain", "Missing x or y");
     return;
@@ -1051,19 +1082,45 @@ void handleGoToPoint() {
   int x = server.arg("x").toInt();
   int y = server.arg("y").toInt();
   bool isDead = server.arg("dead") == "1" || server.arg("dead") == "true";
-  
+  bool isNearest = server.arg("nearest") == "1" || server.arg("nearest") == "true";
+
   // Push into XY queue (FIFO)
   xyQueue.push_back({x, y, isDead});
+  coordViveMode = !isNearest
+  if (isNearest){
+    int start = findNearestNode(robotX, robotY);
+    int goal = findNearestNode(x, y);
+    std::vector<int> route = graph.bfs(start, goal);
+    if (route.empty()) {
+      server.send(200, "text/plain", "NO ROUTE FOUND, but coord is added to XYqueue");
+      return;
+    }
 
-  // Ensure VIVE mode processes queue
-  controlMode = MODE_VIVE;
-  coordViveMode = true; // using coordinate navigation
+    size_t beginIndex = 0;
+    if (!nodeQueue.empty() && nodeQueue.back() == route[0]) {
+      beginIndex = 1;
+    }
+    for (size_t i = beginIndex; i < route.size(); ++i) {
+      nodeQueue.push_back(route[i]);
+    }
 
+    String s = "[";
+    for (size_t i = 0; i < nodeQueue.size(); ++i) {
+      s += String(nodeQueue[i]);
+      if (i + 1 < nodeQueue.size()) s += ",";
+    }
+    s += "]";
+    }
   server.send(200, "text/plain", "GoToPoint added to queue.");
 }
 
 // BFS route API: /route?goal=Y[&start=X]
 void handleRoute() {
+  commandCount++;
+  controlMode = MODE_VIVE;
+  rawStopMotor();
+  coordViveMode = false;
+  xyQueue.clear();
   if (!server.hasArg("goal")) {
     server.send(400, "text/plain", "Missing goal");
     return;
@@ -1109,6 +1166,8 @@ void handleRoute() {
     return;
   }
 
+  
+
   size_t beginIndex = 0;
   if (!nodeQueue.empty() && nodeQueue.back() == route[0]) {
     beginIndex = 1;
@@ -1117,8 +1176,7 @@ void handleRoute() {
     nodeQueue.push_back(route[i]);
   }
 
-  controlMode = MODE_VIVE;
-  coordViveMode = false;
+  
 
   String s = "[";
   for (size_t i = 0; i < nodeQueue.size(); ++i) {
@@ -1132,6 +1190,7 @@ void handleRoute() {
 void handleQueueClear() {
   commandCount++;
   nodeQueue.clear();
+  xyQueue.clear();
   stopMotor();
   server.send(200, "text/plain", "Queue cleared");
 }
@@ -1331,14 +1390,14 @@ void setup() {
   graph.addNode(5000,5224,{0,3,4,10}); //1
   graph.addNode(4220,6030,{0,3,4}); //2
   graph.addNode(5000,6000,{1,2,4}); //3
-  graph.addNode(4450,6130,{2,3,5}); //4
-  graph.addNode(4420,6370,{4}, true); //5
+  graph.addNode(4450,6250,{2,3,5}); //4
+  graph.addNode(4500,7200,{4}, true); //5
 
   graph.addNode(4130,2130,{7,8}); //6
-  graph.addNode(5020,2130,{6,9}); //7
+  graph.addNode(5150,2130,{6,9}); //7
   graph.addNode(3980,3030,{6,9}); //8
-  graph.addNode(5120,3000, {7,8,10}); //9
-  graph.addNode(5043,4190, {9, 1}); //10
+  graph.addNode(5150,3000, {7,8,10}); //9
+  graph.addNode(5100,4190, {9, 1}); //10
   // graph.addNode({}); //9
   // graph.addNode({}); //9
   // graph.addNode({}); //9
@@ -1395,7 +1454,7 @@ void loop() {
     lastSpeedCalc = millis();
   }
 
-  if (millis() - lastControlUpdate >= CONTROL_PERIOD) {
+  if (millis() - lastControlUpdate >= CONTROL_PERIOD && controlMode != MODE_VIVE) {
     updateMotorControl();
     lastControlUpdate = millis();
   }
