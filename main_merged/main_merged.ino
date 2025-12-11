@@ -903,7 +903,7 @@ void followXYQueueStep() {
   uint8_t correctThreshold = viveTargetDead ? 4 : 0;
   if (correctTime > correctThreshold) {
     xyQueue.pop_front();
-    if (viveTargetDead) hitTower();
+    // if (viveTargetDead) hitTower();
   }
 }
 
@@ -1097,18 +1097,22 @@ void handleAttack() {
   wasBackward = false;
 
   if (t == "lowtower") {
+    Serial.println("Attacking low tower");
     controlMode = MODE_LOW_TOWER;
     xyQueue.push_back({PRE_LOW_TOWER_X, PRE_LOW_TOWER_Y, false});
     xyQueue.push_back({LOW_TOWER_X, LOW_TOWER_Y, true});
     server.send(200, "text/plain", "Mode set: LOW TOWER");
   }
   else if (t == "hightower") {
+    Serial.println("Attacking high tower");
     controlMode = MODE_HIGH_TOWER;
+    driveForward = millis();
     xyQueue.push_back({PRE_HIGH_TOWER_X, PRE_HIGH_TOWER_Y, false});
     xyQueue.push_back({HIGH_TOWER_X, HIGH_TOWER_Y, true});
     server.send(200, "text/plain", "Mode set: HIGH TOWER");
   }
   else if (t == "nexus") {
+    Serial.println("Attacking nexus");
     controlMode = MODE_NEXUS;
     hitNexus = false;
     xyQueue.push_back({PRE_NEXUS_X, PRE_NEXUS_Y, false});
@@ -1481,6 +1485,7 @@ void loop() {
       }
       if(autoWall){
         wallFollowPD();
+        // Serial.println("wall following");
       } else if(!viveDone){
         if (millis() - lastViveMove >= VIVE_MOVE_PERIOD) {
           followXYQueueStep();
@@ -1491,9 +1496,9 @@ void loop() {
           lastViveMove = millis();
         }
       } else{
-        if(millis() - driveForward < 2000){
-          targetSpeed = 20;
-          rightTargetSpeed = 20;
+        if(millis() - driveForward < 3000){
+          targetSpeed = 30;
+          rightTargetSpeed = 30;
         } else {
           controlMode   = MODE_MANUAL;
           wallFollowMode = false;
@@ -1510,12 +1515,14 @@ void loop() {
         computeVivePose();
         lastVive = millis();
       }
-      if(robotY < HIGH_TOWER_Y_THRESHOLD){
+      if(millis() - driveForward > 500 && robotY < HIGH_TOWER_Y_THRESHOLD){
         autoWall = false;
       }
       if(autoWall){
         wallFollowPD();
+        // Serial.println("wall following");
       } else if(!viveDone){
+        // Serial.println("Doing vive");
         if (millis() - lastViveMove >= VIVE_MOVE_PERIOD) {
           followXYQueueStep();
           if (xyQueue.empty()) {
@@ -1525,9 +1532,9 @@ void loop() {
           lastViveMove = millis();
         }
       } else{
-        if(millis() - driveForward < 2000){
-          targetSpeed = 20;
-          rightTargetSpeed = 20;
+        if(millis() - driveForward < 3000){
+          targetSpeed = 30;
+          rightTargetSpeed = 30;
         } else {
           controlMode   = MODE_MANUAL;
           wallFollowMode = false;
@@ -1549,6 +1556,7 @@ void loop() {
       }
       if(autoWall){
         wallFollowPD();
+        // Serial.println("wall following");
       } else if(!viveDone){
         if (millis() - lastViveMove >= VIVE_MOVE_PERIOD) {
           followXYQueueStep();
