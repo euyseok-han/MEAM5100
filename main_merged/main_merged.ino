@@ -331,6 +331,7 @@ int findNearestNode(float x, float y) {
   int best = -1;
   float bestDist = 1e12;
   for (int i = 0; i < (int)graph.nodes.size(); i++) {
+    if (graph.nodes[i].dead) continue;
     float dx = x - graph.nodes[i].x;
     float dy = y - graph.nodes[i].y;
     float d2 = dx * dx + dy * dy;
@@ -520,7 +521,6 @@ void updateGyroIntegration() {
   lastGyroTime = now;
 
   currentAngle += readGyroZdeg() * dt;
-  Serial.println(currentAngle);
   while (currentAngle >  180) currentAngle -= 360;
   while (currentAngle < -180) currentAngle += 360;
 }
@@ -838,12 +838,12 @@ bool viveGoToPointStep() {
   const float DEG2RAD        = (float)M_PI / 180.0f;
   const float TURN_THRESHOLD = viveTargetDead ? (8.0f * DEG2RAD) : (25.0f * DEG2RAD);
   const float TURN_GAIN      = viveTargetDead ? 50.0f : 50.0f;
-  const int   TURN_LIMIT     = viveTargetDead ? 25 : 34;
-
+  const int   TURN_LIMIT     = viveTargetDead ? 23 : 34;
+  
   if (fabs(err) > TURN_THRESHOLD) {
     float turnRaw = err * TURN_GAIN;
-    if (40 > turnRaw && turnRaw >= 0) turnRaw = 25;
-    if (-40 < turnRaw && turnRaw < 0) turnRaw = -25;
+    if (40 > turnRaw && turnRaw >= 0) turnRaw = 23;
+    if (-40 < turnRaw && turnRaw < 0) turnRaw = -23;
     float turn    = constrain((int)turnRaw, -TURN_LIMIT, TURN_LIMIT);
     rawSetMotorPWM( -turn, LEFT_MOTOR);
     rawSetMotorPWM( turn, RIGHT_MOTOR);
@@ -1481,21 +1481,17 @@ void setup() {
 
   // Graph nodes (from Code A)
     // Graph nodes (from Code A)
-  graph.addNode(4150,5200,{1,2,4}); //0
-  graph.addNode(5000,5224,{0,3,4,10}); //1
-  graph.addNode(4220,6030,{0,3,4}); //2
-  graph.addNode(5000,6000,{1,2,4}); //3
-  graph.addNode(4450,6250,{2,3,5}); //4
-  graph.addNode(4500,7200,{4}, true); //5
-
-  graph.addNode(4130,2130,{7,8}); //6
-  graph.addNode(5150,2130,{6,9}); //7
-  graph.addNode(3980,3030,{6,9}); //8
-  graph.addNode(5150,3000, {7,8,10}); //9
-  graph.addNode(5100,4190, {9, 1}); //10
-  // graph.addNode({}); //9
-  // graph.addNode({}); //9
-  // graph.addNode({}); //9
+  graph.addNode(4550, 1800, {1}, true); //0
+  graph.addNode(4550,2110,{0,2,3}); //1
+  graph.addNode(4475,3275, {1,3,9}); //2
+  graph.addNode(5020,3200,{1,2,4}); //3
+  graph.addNode(5090,4120, {3,6}); //4
+  graph.addNode(4490,4900,{6,7,10}); //5
+  graph.addNode(5030,4990,{4,5,7}); //6
+  graph.addNode(4670,6250,{5,6,8}); //7
+  graph.addNode(4670, 6600,{7}, true); //8
+  graph.addNode(4575, 3720,{2}, true); //9(2-2)
+  graph.addNode(4600, 4600,{5}, true); //10(5-2)
   
 }
 
