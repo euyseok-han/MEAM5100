@@ -153,6 +153,7 @@ ControlMode controlMode = MODE_MANUAL;
 // ========== AUTONOMOUS TASKS ==========
 bool autoWall = false;
 bool viveDone = false;
+uint16_t certainCount = 0;
 bool hitNexus = false;
 unsigned long driveForward = 0;
 
@@ -1095,6 +1096,7 @@ void handleAttack() {
   autoWall = true;
   coordViveMode = true;   // attacks always use coordinate navigation
   wasBackward = false;
+  certainCount = 0;
 
   if (t == "lowtower") {
     Serial.println("Attacking low tower");
@@ -1106,7 +1108,6 @@ void handleAttack() {
   else if (t == "hightower") {
     Serial.println("Attacking high tower");
     controlMode = MODE_HIGH_TOWER;
-    driveForward = millis();
     xyQueue.push_back({PRE_HIGH_TOWER_X, PRE_HIGH_TOWER_Y, false});
     xyQueue.push_back({HIGH_TOWER_X, HIGH_TOWER_Y, true});
     server.send(200, "text/plain", "Mode set: HIGH TOWER");
@@ -1480,7 +1481,10 @@ void loop() {
         computeVivePose();
         lastVive = millis();
       }
-      if(robotY > LOW_TOWER_Y_THRESHOLD){
+      if(robotY > LOW_TOWER_Y_THRESHOLD - 100){
+        certainCount++
+      }
+      if(certainCount > 5 && robotY > LOW_TOWER_Y_THRESHOLD){
         autoWall = false;
       }
       if(autoWall){
@@ -1515,7 +1519,10 @@ void loop() {
         computeVivePose();
         lastVive = millis();
       }
-      if(millis() - driveForward > 500 && robotY < HIGH_TOWER_Y_THRESHOLD){
+      if(robotY > 4800 && robotY < 5200){
+        certainCount++;
+      }
+      if(certainCount > 10 && robotY < HIGH_TOWER_Y_THRESHOLD){
         autoWall = false;
       }
       if(autoWall){
@@ -1551,7 +1558,10 @@ void loop() {
         computeVivePose();
         lastVive = millis();
       }
-      if(robotY > NEXUS_Y_THRESHOLD){
+      if(robotY > NEXUS_Y_THRESHOLD - 100){
+        certainCount++;
+      }
+      if(certainCount > 5 && robotY > NEXUS_Y_THRESHOLD){
         autoWall = false;
       }
       if(autoWall){
