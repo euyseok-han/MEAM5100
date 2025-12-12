@@ -181,7 +181,7 @@ unsigned long driveForward = 0;
 unsigned long wallFollowTime = 0;
 
 const int LOW_TOWER_Y_THRESHOLD = 5000;
-const int PRE_LOW_TOWER_X = 4600;
+const int PRE_LOW_TOWER_X = 4610;
 const int PRE_LOW_TOWER_Y = 5150;
 const int LOW_TOWER_X = 4610;
 const int LOW_TOWER_Y = 4000;
