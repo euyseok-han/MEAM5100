@@ -450,7 +450,6 @@ void stopMotor() {
 void rawStopMotor() {
   rawSetMotorPWM(0, LEFT_MOTOR);
   rawSetMotorPWM(0, RIGHT_MOTOR);
-
   targetSpeed        = 0;
   rightTargetSpeed   = 0;
   baseSpeed          = 0;
@@ -839,7 +838,7 @@ bool viveGoToPointStep() {
   const float DEG2RAD        = (float)M_PI / 180.0f;
   const float TURN_THRESHOLD = viveTargetDead ? (8.0f * DEG2RAD) : (25.0f * DEG2RAD);
   const float TURN_GAIN      = viveTargetDead ? 50.0f : 50.0f;
-  const int   TURN_LIMIT     = viveTargetDead ? 23 : 34;
+  const int   TURN_LIMIT     = viveTargetDead ? 23 : 25;
   
   if (fabs(err) > TURN_THRESHOLD) {
     float turnRaw = err * TURN_GAIN;
@@ -1081,9 +1080,13 @@ void handleWallPD() {
 
 void xyQueueClear() {
   while (!xyQueue.empty()) xyQueue.pop_front();
+  viveTargetX = 0 ;
+  viveTargetY = 0 ;
 }
 void nodeQueueClear() {
   while (!nodeQueue.empty()) nodeQueue.erase(nodeQueue.begin());
+  viveTargetX = 0 ;
+  viveTargetY = 0 ;   
 }
 void handleMode() {
   commandCount++;
@@ -1177,7 +1180,6 @@ void handleGoToPoint() {
   autoWall = true;
   int gotoX = server.arg("x").toInt();
   gotoY = server.arg("y").toInt();
-  if (gotoY < 4600) gotoY = 2100;
   controlMode = MODE_VIVE;
   readDualVive();
   if (!server.hasArg("x") || !server.hasArg("y")) {
@@ -1191,7 +1193,7 @@ void handleGoToPoint() {
   // Push into XY queue (FIFO)
   xyQueue.push_back({gotoX, gotoY, isDead});
   coordViveMode = true;
-  
+  if (gotoY < 4600) gotoY = 2100;
   server.send(200, "text/plain", "GoToPoint added to queue.");
   wallFollowTime = millis();
 }
@@ -1270,6 +1272,7 @@ void handleRoute() {
 }
 
 void handleQueueClear() {
+  autoWall = false;
   commandCount++;
   controlMode = MODE_MANUAL;
   nodeQueueClear();
