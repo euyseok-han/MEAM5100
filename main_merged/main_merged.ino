@@ -1249,35 +1249,6 @@ void handleArm() {
   }
 }
 
-// ======================= ARM CONTROL HANDLER ============================
-void handleArm() {
-  commandCount++;
-
-  if (!server.hasArg("cmd")) {
-    server.send(400, "text/plain", "Missing cmd");
-    return;
-  }
-
-  String cmd = server.arg("cmd");
-
-  // You can replace these with actual motor/servo commands later
-  if (cmd == "return") {
-    armAttacking = false;
-    returnArm();
-    Serial.println("ARM: Return arm command received");
-    server.send(200, "text/plain", "Arm returning");
-  }
-  else if (cmd == "attack") {
-    armAttacking = true;
-    armOut = false;
-    Serial.println("ARM: Attack arm command received");
-    server.send(200, "text/plain", "Arm attacking");
-  }
-  else {
-    server.send(400, "text/plain", "Unknown cmd");
-  }
-}
-
 int gotoY;
 
 void handleGoToPoint() {
@@ -1588,9 +1559,7 @@ void loop() {
   server.handleClient();
 
   if(millis() - topHatUpdate > 500){
-    Serial.println("In tophat");
     setMultiplexerBus(TOP_HAT_BUS);
-    Serial.println(commandCount);
     Wire.beginTransmission(0x28);
     Wire.write(commandCount);
     Wire.endTransmission();
