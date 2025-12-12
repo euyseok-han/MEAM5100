@@ -69,7 +69,7 @@ volatile uint32_t commandCount = 0;
 // ========== CONTROL CONSTANTS ==========
 const int   PWM_FREQ           = 5000;
 const int   PWM_RESOLUTION     = 8;
-const float GOAL_REACHED_THRESHOLD = 180.0f; // mm radius for BFS nodes
+const float GOAL_REACHED_THRESHOLD = 173.0f; // mm radius for BFS nodes
 
 // ========== MOTOR & ENCODER ==========
 volatile long encoderCount      = 0;
@@ -181,7 +181,7 @@ unsigned long driveForward = 0;
 unsigned long wallFollowTime = 0;
 
 const int LOW_TOWER_Y_THRESHOLD = 5000;
-const int PRE_LOW_TOWER_X = 4610;
+const int PRE_LOW_TOWER_X = 4600;
 const int PRE_LOW_TOWER_Y = 5150;
 const int LOW_TOWER_X = 4610;
 const int LOW_TOWER_Y = 4000;
@@ -192,11 +192,11 @@ const int PRE_HIGH_TOWER_Y = 3570;
 const int HIGH_TOWER_X = 2600;
 const int HIGH_TOWER_Y = 3570;
 
-const int NEXUS_Y_THRESHOLD = 4500;
-const int PRE_NEXUS_X = 4720;
+const int NEXUS_Y_THRESHOLD = 4550;
+const int PRE_NEXUS_X = 4550;
 const int PRE_NEXUS_Y = 6050;
-const int NEXUS_X = 4720;
-const int NEXUS_Y = 6500;
+const int NEXUS_X = 4600;
+const int NEXUS_Y = 6300;
 
 // ========== VIVE ==========
 Vive510 viveLeft(VIVE_LEFT_PIN);
@@ -832,7 +832,7 @@ void computeVivePose() {
 void hitTower(){
   int hitSpeed = wasBackward ? -30 : 30;
 
-  uint8_t hitTimes = 5;
+  uint8_t hitTimes = 7;
 
   for (int k = 0; k < hitTimes; k++) {
     rawSetMotorPWM( hitSpeed, LEFT_MOTOR);
@@ -923,9 +923,6 @@ bool viveGoToPointStep() {
   float rightCmd = bfsSpeed + steer;
   rawSetMotorPWM(leftCmd, LEFT_MOTOR);
   rawSetMotorPWM( rightCmd, RIGHT_MOTOR);
-  Serial.print("going left/right speed:" );
-  Serial.print(leftCmd);
-  Serial.println(rightCmd);
   return false;
 }
 
@@ -979,7 +976,7 @@ void followXYQueueStep() {
 
   if (viveGoToPointStep()) correctTime ++;
   else correctTime = 0;
-  uint8_t correctThreshold = viveTargetDead ? 4 : 0;
+  uint8_t correctThreshold = viveTargetDead ? 6 : 0;
   if (correctTime > correctThreshold) {
     xyQueue.pop_front();
     // if (viveTargetDead) hitTower();
@@ -1268,6 +1265,7 @@ void handleGoToPoint() {
   // Push into XY queue (FIFO)
   xyQueue.push_back({server.arg("x").toInt(), server.arg("y").toInt(), isDead});
   coordViveMode = true;
+  if (gotoY<4000 && gotoY > 3350) gotoY = 2050;
   wallFollowTime = millis();
 }
 
@@ -1707,10 +1705,10 @@ void loop() {
         computeVivePose();
         lastVive = millis();
       }
-      if(millis() - wallFollowTime > 3000 && robotY > 4800 && robotY < 5200){
+      if(millis() - wallFollowTime > 2000 && robotY > 3500 && robotY < 4120){
         certainCount++;
       }
-      if(!wallDone && certainCount > 2 && robotY < HIGH_TOWER_Y_THRESHOLD + 20){
+      if(!wallDone && certainCount > 1 ){
         Serial.println(certainCount);
         autoWall = false;
         wallDone = true;
