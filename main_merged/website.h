@@ -266,7 +266,6 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
           <div class="queue-buttons">
             <h4>Actions</h4>
             <button id="pauseBtn" onclick="toggleQueuePause()" class="queue-btn">Pause</button>
-            <button onclick="queueSkip()" class="queue-btn" style="background:#ff9800;">Skip Node</button>
             <button onclick="queueClear()" class="queue-btn stop-btn">Clear Queue("C" key)</button>
           </div>
 
@@ -537,9 +536,6 @@ MODE  : ${data.mode}`;
       fetch('/queue/clear').then(() => refreshStatus());
     }
 
-    function queueSkip() {
-      fetch('/queue/skip').then(() => refreshStatus());
-    }
     function sendGoToPoint() {
       const x = document.getElementById("gotoX").value;
       const y = document.getElementById("gotoY").value;

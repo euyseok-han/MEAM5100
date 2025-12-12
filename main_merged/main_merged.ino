@@ -161,6 +161,7 @@ unsigned long driveForward = 0;
 unsigned long wallFollowTime = 0;
 
 const int LOW_TOWER_Y_THRESHOLD = 5000;
+const int GOTO_POINT_THRESHOLD = 2150;
 const int PRE_LOW_TOWER_X = 4610;
 const int PRE_LOW_TOWER_Y = 5150;
 const int LOW_TOWER_X = 4610;
@@ -1166,6 +1167,8 @@ void handleAttack() {
 
 void handleGoToPoint() {
   commandCount++;
+  autoWall = true;
+  wallFollowTime = 0;
   controlMode = MODE_VIVE;
   readDualVive();
   if (!server.hasArg("x") || !server.hasArg("y")) {
@@ -1282,23 +1285,11 @@ void handleRoute() {
 
 void handleQueueClear() {
   commandCount++;
+  controlMode = MODE_MANUAL;
   nodeQueue.clear();
   xyQueue.clear();
   stopMotor();
   server.send(200, "text/plain", "Queue cleared");
-}
-
-void handleQueueSkip() {
-  commandCount++;
-  if (!nodeQueue.empty()) {
-    int skipped = nodeQueue.front();
-    nodeQueue.erase(nodeQueue.begin());
-    String msg = "Skipped node ";
-    msg += skipped;
-    server.send(200, "text/plain", msg);
-  } else {
-    server.send(200, "text/plain", "Queue empty");
-  }
 }
 
 void handleQueuePause() {
@@ -1528,15 +1519,21 @@ void loop() {
         computeVivePose();
         lastVive = millis();
       }
-      if (millis() - lastViveMove >= VIVE_MOVE_PERIOD) {
-        if (coordViveMode)
-          followXYQueueStep();
-        else
-          followQueueStep();
-      
-      lastViveMove = millis();
+      if (autowall){
+        if !(millis() - wallFollowTime > 2000 && robotY > GOTO_POINT_THRESHOLD) wallFollowPD();
+        else autowall = false;
       }
-      printViveState();
+      else {
+        if (millis() - lastViveMove >= VIVE_MOVE_PERIOD) {
+          if (coordViveMode)
+            followXYQueueStep();
+          else
+            followQueueStep();
+        
+        lastViveMove = millis();
+        }
+        printViveState();
+      }
       break;
 
     case MODE_LOW_TOWER:
