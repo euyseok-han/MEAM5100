@@ -183,7 +183,7 @@ unsigned long wallFollowTime = 0;
 const int LOW_TOWER_Y_THRESHOLD = 5000;
 const int PRE_LOW_TOWER_X = 4610;
 const int PRE_LOW_TOWER_Y = 5150;
-const int LOW_TOWER_X = 4610;
+const int LOW_TOWER_X = 4590;
 const int LOW_TOWER_Y = 4000;
 
 const int HIGH_TOWER_Y_THRESHOLD = 3700;
@@ -192,9 +192,9 @@ const int PRE_HIGH_TOWER_Y = 3570;
 const int HIGH_TOWER_X = 2600;
 const int HIGH_TOWER_Y = 3570;
 
-const int NEXUS_Y_THRESHOLD = 4550;
+const int NEXUS_Y_THRESHOLD = 4580;
 const int PRE_NEXUS_X = 4550;
-const int PRE_NEXUS_Y = 6050;
+const int PRE_NEXUS_Y = 6000;
 const int NEXUS_X = 4600;
 const int NEXUS_Y = 6300;
 
@@ -1766,11 +1766,10 @@ void loop() {
         computeVivePose();
         lastVive = millis();
       }
-      if(millis() - wallFollowTime > 2000 && robotY > 3500 && robotY < 4120){
+      if(millis() - wallFollowTime > 2000 && robotY > 3620 && robotY < 4120){
         certainCount++;
       }
       if(!wallDone && certainCount > 1 ){
-        Serial.println(certainCount);
         autoWall = false;
         wallDone = true;
         targetSpeed = 0;

@@ -190,6 +190,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
         <button class="stop-btn" onclick="stopMotor()">STOP("S" key)</button>
         <button onclick="setControl(currentSpeed, currentSteering)" style="background:#008CFF;">Go("D" key)</button>
+        <button onclick="initSpeed()" style="background:#008CFF;">Init("I" key)</button>
       </div>
 
       <!-- PID TUNING -->
@@ -321,8 +322,8 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
           align-items:center;
           gap:12px;
       ">
-        <button onclick="returnArm()" style="flex:1; padding:14px;">Return Arm</button>
-        <button onclick="attackArm()" style="flex:1; padding:14px;">Attack Arm</button>
+        <button onclick="returnArm()" style="flex:1; padding:14px;">Return Arm(Q)</button>
+        <button onclick="attackArm()" style="flex:1; padding:14px;">Attack Arm(E)</button>
       </div>
     </div>
   </div>
@@ -385,6 +386,16 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
       fetch('/stop');
     }
+
+    function initSpeed(){
+      currentSpeed = 0;
+      currentSteering = 0;
+      document.getElementById('speedSlider').value = 0;
+      document.getElementById('steeringSlider').value = 0;
+      document.getElementById('speedValue').textContent = 0;
+      document.getElementById('steeringValue').textContent = 0;
+      updateDirectionIndicator(0, 0);
+      }
     function stopTask() {
       currentSpeed = 0;
       currentSteering = 0;
@@ -668,6 +679,10 @@ MODE  : ${data.mode}`;
         setControl(currentSpeed, currentSteering);
         return;
       }
+      if (e.key === "i" || e.key === "I") {
+        initSpeed();
+        return;
+      }
       if (e.key === "b" || e.key === "B") {
         callRoute();
         return;
@@ -676,6 +691,14 @@ MODE  : ${data.mode}`;
         sendGoToPoint();
         return;
       }
+      if (e.key === "q" || e.key === "Q") {
+        returnArm();
+        return;
+      }
+      if (e.key === "E" || e.key === "e") {
+        attackArm();
+        return;
+}
       if (e.key === "c" || e.key === "C") {
         queueClear();
         return;
