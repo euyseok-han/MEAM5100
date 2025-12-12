@@ -561,6 +561,56 @@ float readGyroZdeg() {
   return filteredGyroZ;
 }
 
+void reSetup(){
+
+  setMultiplexerBus(TOF_FRONT_BUS);
+  if (!frontTOF.begin()) Serial.println("Front TOF init failed");
+  else                   Serial.println("Front TOF OK");
+
+  setMultiplexerBus(TOF_SIDE_FRONT_BUS);
+  if (!rightTOF.begin()) Serial.println("Side front TOF init failed");
+  else                   Serial.println("Side front TOF OK");
+
+  setMultiplexerBus(TOF_SIDE_BACK_BUS);
+  if (!right2TOF.begin()) Serial.println("Side back TOF init failed");
+  else                    Serial.println("Side back TOF OK");
+
+  setMultiplexerBus(IMU_BUS);
+  if (mpu.begin()) {
+    mpu.setAccelerometerRange(MPU6050_RANGE_4_G);
+    mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+    mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+    sensors_event_t a, g, temp;
+    float sum = 0;
+    for (int i = 0; i < 50; i++) {
+      mpu.getEvent(&a, &g, &temp);
+      sum += g.gyro.z;
+      delay(10);
+    }
+    gyroZOffset = sum / 50.0f;
+    filteredGyroZ = 0.0;
+    lastGyroTime = millis();
+    Serial.println("MPU6050 OK");
+  } else {
+    Serial.println("MPU6050 not found");
+  }
+
+  viveLeft.begin();
+  viveRight.begin();
+
+  BusServo.OnInit();
+  HardwareSerial.begin(115200,SERIAL_8N1,SERVO_SERIAL_RX,SERVO_SERIAL_TX);
+  delay(500);
+
+  lastSpeedCalc     = millis();
+  lastControlUpdate = millis();
+  lastTOFRead       = millis();
+  lastPrint         = millis();
+  lastVive          = millis();
+  topHatUpdate      = millis();
+  lastServoMove     = millis();
+
+}
 void updateGyroIntegration() {
   unsigned long now = millis();
   float dt = (now - lastGyroTime) / 1000.0f;
@@ -1028,6 +1078,16 @@ void handleStop() {
   server.send(200, "text/plain", "Motor stopped");
 }
 
+void handleStopTask() {
+  commandCount++;
+  reSetup();
+  stopMotor();
+  rawStopMotor();
+  controlMode = MODE_MANUAL;
+  
+  server.send(200, "text/plain", "Motor stopped");
+}
+
 void handleSetPID() {
   commandCount++;
   if (server.hasArg("kp") && server.hasArg("ki") && server.hasArg("kd")) {
@@ -1472,6 +1532,7 @@ void setup() {
   server.on("/setspeed",    handleSetSpeed);
   server.on("/control",     handleControl);
   server.on("/stop",        handleStop);
+  server.on("/stop_task",       handleStopTask);
   server.on("/setpid",      handleSetPID);
   server.on("/pid",         handlePID);
   server.on("/status",      handleStatus);

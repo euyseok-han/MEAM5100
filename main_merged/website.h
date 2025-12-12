@@ -310,6 +310,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <button onclick="attackLowTower()"  style="flex:1; padding:14px;">Attack Low Tower</button>
         <button onclick="attackHighTower()" style="flex:1; padding:14px;">Attack High Tower</button>
         <button onclick="attackNexus()"     style="flex:1; padding:14px;">Attack Nexus</button>
+        <button onclick="stopTask()"     style="flex:1; padding:14px;">Purge Tasks(P key)(</button>
       </div>
 
       <!-- ARM CONTROLS -->
@@ -383,6 +384,17 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       updateDirectionIndicator(0, 0);
 
       fetch('/stop');
+    }
+    function stopTask() {
+      currentSpeed = 0;
+      currentSteering = 0;
+      document.getElementById('speedSlider').value = 0;
+      document.getElementById('steeringSlider').value = 0;
+      document.getElementById('speedValue').textContent = 0;
+      document.getElementById('steeringValue').textContent = 0;
+      updateDirectionIndicator(0, 0);
+
+      fetch('/stop_task');
     }
 
     function updatePID() {
@@ -648,7 +660,10 @@ MODE  : ${data.mode}`;
         stopMotor();
         return;
       }
-        
+      if (e.key === 'p' || e.key === 'P') {
+        stopTask();
+        return;
+      }  
       if (e.key === "d" || e.key === "D") {
         setControl(currentSpeed, currentSteering);
         return;
