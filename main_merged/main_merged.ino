@@ -118,6 +118,29 @@ PIDController rightPID;
 
 // ========== XBOX CONTROLLER ==========
 XboxController controller;
+struct XboxSample {
+  int16_t speed;    // targetSpeed
+  int16_t steer;    // steeringValue
+  uint16_t dt;      // time delta in ms (usually 2)
+};
+
+constexpr uint16_t SAMPLE_PERIOD_MS = 5;
+constexpr uint16_t PLAYBACK_PERIOD_MS = 500;
+constexpr uint16_t MAX_SAMPLES = PLAYBACK_PERIOD_MS / SAMPLE_PERIOD_MS;
+
+XboxSample bufferA[MAX_SAMPLES];
+XboxSample bufferB[MAX_SAMPLES];
+
+volatile XboxSample* recordBuf = bufferA;
+volatile XboxSample* playBuf   = bufferB;
+
+volatile uint16_t recordCount = 0;
+volatile uint16_t playIndex   = 0;
+
+unsigned long lastSampleTime  = 0;
+unsigned long bufferSwapTime  = 0;
+unsigned long lastPlaybackTime = 0;
+
 
 // ========== TOF (Code B) ==========
 Adafruit_VL53L0X frontTOF;
@@ -531,6 +554,60 @@ void calculateSpeed() {
     lastSpeedCalc         = now;
   }
 }
+
+// ========== XBOX CONTROLLER ==========
+void sampleXbox() {
+  if (!controller.isConnected()) return;
+
+  XboxControlsEvent e;
+  controller.read(&e);
+
+  float steer = 0;
+  float speed = 0;
+
+  if (fabs(e.leftStickX) > 0.10f)
+    steer = e.leftStickX * 40.0f;
+
+  if (e.rightTrigger > 0.0f)
+    speed = e.rightTrigger * 60.0f;
+  else if (e.leftTrigger > 0.0f)
+    speed = -e.leftTrigger * 60.0f;
+
+  if (recordCount < MAX_SAMPLES) {
+    recordBuf[recordCount++] = {
+      .speed = (int16_t)(speed + steer),
+      .steer = (int16_t)(speed - steer),
+      .dt    = SAMPLE_PERIOD_MS
+    };
+  }
+}
+
+void playbackXbox() {
+  if (playIndex >= MAX_SAMPLES) return;
+
+  unsigned long now = millis();
+  if (now - lastPlaybackTime < playBuf[playIndex].dt) return;
+
+  targetSpeed      = playBuf[playIndex].speed;
+  rightTargetSpeed = playBuf[playIndex].steer;
+
+  lastPlaybackTime = now;
+  playIndex++;
+}
+
+void swapBuffers() {
+  // Swap pointers
+  XboxSample* tmp = (XboxSample*)playBuf;
+  playBuf = recordBuf;
+  recordBuf = tmp;
+
+  // Reset indices
+  playIndex   = 0;
+  recordCount = 0;
+}
+
+
+
 
 // ========== SERVO ==========
 void returnArm() {
@@ -1612,47 +1689,37 @@ void loop() {
       }
 
       // Xbox Controller
-      if (millis() - xboxRead >= 500) {
+      unsigned long xboxNow = millis();
+      if(xboxNow - lastSampleTime >= SAMPLE_PERIOD_MS) {
+        sampleXbox();
+        lastSampleTime = xboxNow;
+      }
+      playbackXbox();
+      if(xboxNow - bufferSwapTime >= PLAYBACK_PERIOD_MS) {
+        commandCount++;
+        swapBuffers();
+        bufferSwapTime = xboxNow;
+      }
+      if(millis() - xboxRead > 100){
         if (controller.isConnected()) {
-          commandCount++;
-          float xboxSteer = 0;
-          float xboxSpeed = 0;
           XboxControlsEvent e;
           controller.read(&e);
-
-          if (e.leftStickX < -0.10 || e.leftStickX > 0.10) {
-            xboxSteer = e.leftStickX * 40.0;
-          } else {
-            xboxSteer = 0;
-          }
-          if (e.rightTrigger > 0.0){
-            xboxSpeed = e.rightTrigger * 60.0;
-          } else if (e.leftTrigger > 0.0){
-            xboxSpeed = e.leftTrigger * -60.0;
-          } else {
-            xboxSpeed = 0;
-          }
-
           if(e.buttonA && !armAttacking){
+            commandCount++;
             armAttacking = true;
             armOut = false;
             Serial.println("Attacking arm");
           }
           if(e.buttonB && armAttacking){
+            commandCount++;
             armAttacking = false;
             returnArm();
             Serial.println("Returning arm");
           }
-
-          targetSpeed = xboxSpeed + xboxSteer;
-          rightTargetSpeed = xboxSpeed - xboxSteer;
-
-          Serial.printf("lx: %.2f, ly: %.2f, rx: %.2f, ry: %.2f, lt: %.2f, rt: %.2f\n",
-                        e.leftStickX, e.leftStickY, e.rightStickX, e.rightStickY, e.leftTrigger, e.rightTrigger);
-        } else {
-          Serial.println("controller not connected");
         }
+        xboxRead = millis();
       }
+
       robotX = 0;
       robotY = 0;
       break;
