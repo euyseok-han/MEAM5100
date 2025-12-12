@@ -803,11 +803,11 @@ void hitTower(){
 }
 bool viveGoToPointStep() {
   if (!leftValid || !rightValid) {
-    stopMotor();
+    rawStopMotor();
     return false;
   }
   if (!vivePoseValid()) {
-    stopMotor();
+    rawStopMotor();
     return false;
   }
 
@@ -884,15 +884,15 @@ bool viveGoToPointStep() {
 
 void followQueueStep() {
   if (!vivePoseValid()) {
-    stopMotor();
+    rawStopMotor();
     return;
   }
   if (queuePaused) {
-    stopMotor();
+    rawStopMotor();
     return;
   }
   if ( nodeQueue.empty()) {
-    stopMotor();
+    rawStopMotor();
     coordViveMode = true;
     return;
   }
@@ -916,11 +916,11 @@ void followQueueStep() {
 // Process coordinate-based XY queue (FIFO)
 void followXYQueueStep() {
   if (!vivePoseValid()) {
-    stopMotor();
+    rawStopMotor();
     return;
   }
   if (xyQueue.empty()) {
-    stopMotor();
+    rawStopMotor();
     coordViveMode = false;
     return;
   }
@@ -1100,7 +1100,7 @@ void handleMode() {
     wallFollowMode = false;
     currentState  = STATE_IDLE;
     autoWall = true;
-    stopMotor();
+    rawStopMotor();
     robotX = 0; robotY = 0;
     xyQueueClear();
     nodeQueueClear();
@@ -1190,10 +1190,8 @@ void handleGoToPoint() {
   bool isNearest = server.arg("nearest") == "1" || server.arg("nearest") == "true";
 
   // Push into XY queue (FIFO)
-  xyQueue.push_back({server.arg("x").toInt();, server.arg("y").toInt();, isDead});
+  xyQueue.push_back({server.arg("x").toInt(), server.arg("y").toInt(), isDead});
   coordViveMode = true;
-  if (gotoY < 4600) gotoY = 2100;
-  server.send(200, "text/plain", "GoToPoint added to queue.");
   wallFollowTime = millis();
 }
 
@@ -1276,7 +1274,7 @@ void handleQueueClear() {
   controlMode = MODE_MANUAL;
   nodeQueueClear();
   xyQueueClear();
-  stopMotor();
+  rawStopMotor();
   server.send(200, "text/plain", "Queue cleared");
 }
 
@@ -1507,7 +1505,7 @@ void loop() {
         lastVive = millis();
       }
       if (autoWall){
-        if (!(millis() - wallFollowTime > 1000 && robotY > gotoY + 30)) {wallFollowPD();}
+        if (!(millis() - wallFollowTime > 1100 && robotY > gotoY + 30)) {wallFollowPD();}
         else {
           rawStopMotor(); 
           autoWall = false;
