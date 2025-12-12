@@ -58,6 +58,8 @@
 #define VIVE_LEFT_PIN      4
 #define VIVE_RIGHT_PIN     5
 
+uint8_t health = 1;
+
 // ========== WIFI ==========
 const char* ssid = "TP-Link_8A8C";
 const char* password = "12488674";
@@ -88,6 +90,8 @@ int lastServoMove = 0;
 int servoPos = 0;
 bool armOut = false;
 bool armAttacking = false;
+bool unloaded = true;
+unsigned long servoReturn = 0;
 HardwareSerial HardwareSerial(2);
 LobotSerialServoControl BusServo(HardwareSerial,receiveEnablePin,transmitEnablePin);
 
@@ -523,6 +527,8 @@ void calculateSpeed() {
 // ========== SERVO ==========
 void returnArm() {
   BusServo.LobotSerialServoMove(1,0,1500);
+  unloaded = false;
+  servoReturn = millis();
 }
 
 void attackArm() {
@@ -538,7 +544,7 @@ void attackArm() {
       } else {
         servoPos = 400;
       }
-      BusServo.LobotSerialServoMove(1,servoPos,1500);
+      BusServo.LobotSerialServoMove(1,servoPos,1200);
       lastServoMove = millis();
     }
   }
@@ -1507,7 +1513,7 @@ void setup() {
   server.on("/arm", handleArm);
   server.begin();
 
-  Wire.begin(I2C_SDA, I2C_SCL);
+  Wire.begin(I2C_SDA, I2C_SCL, 40000);
 
   setMultiplexerBus(TOF_FRONT_BUS);
   if (!frontTOF.begin()) Serial.println("Front TOF init failed");
@@ -1575,19 +1581,25 @@ void setup() {
 // ========== LOOP ==========
 void loop() {
   server.handleClient();
+
   if(millis() - topHatUpdate > 500){
+    Serial.println("In tophat");
     setMultiplexerBus(TOP_HAT_BUS);
+    Serial.println(commandCount);
+    Wire.beginTransmission(0x28);
     Wire.write(commandCount);
     Wire.endTransmission();
     commandCount = 0;
 
-    Wire.requestFrom(0x70, 1);
-    uint8_t health = 1;
-    while(Wire.available()){
-      health = Wire.read();
-      Serial.print("Health: ");
-      Serial.println(health);
+    uint8_t cnt = Wire.requestFrom(0x28, 1);
+    if (cnt > 0) {
+      while(Wire.available()){
+        health = Wire.read();
+        Serial.print("Health: ");
+        Serial.println(health);
+      }
     }
+    
     // Robot is dead
     if(health == 0){
       stopMotor();
@@ -1607,6 +1619,9 @@ void loop() {
       }
       if(armAttacking){
         attackArm();
+      } else if(!unloaded && millis() - servoReturn > 2000){
+        BusServo.LobotSerialServoUnload(1);
+        unloaded = true;
       }
       robotX = 0;
       robotY = 0;
