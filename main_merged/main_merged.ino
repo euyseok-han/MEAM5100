@@ -530,6 +530,7 @@ void attackArm() {
     BusServo.LobotSerialServoMove(1,700,1500);
     armOut = true;
     servoPos = 1000;
+    lastServoMove = millis();
   } else {
     if(millis() - lastServoMove > 2000){
       if(servoPos == 400){
