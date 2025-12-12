@@ -862,7 +862,7 @@ bool viveGoToPointStep() {
   // ---------------------------
   const float SPEED_GAIN = 20.0f;   // dist / 25 gives speed
   float bfsSpeed = dist / SPEED_GAIN;
-  bfsSpeed = constrain((int)bfsSpeed, 30, 70);
+  bfsSpeed = constrain((int)bfsSpeed, 30, 50);
 
   const float STEER_GAIN  = 40.0f;
   const int   STEER_LIMIT = 20.0;
@@ -1178,7 +1178,6 @@ int gotoY;
 void handleGoToPoint() {
   commandCount++;
   autoWall = true;
-  int gotoX = server.arg("x").toInt();
   gotoY = server.arg("y").toInt();
   controlMode = MODE_VIVE;
   readDualVive();
@@ -1191,7 +1190,7 @@ void handleGoToPoint() {
   bool isNearest = server.arg("nearest") == "1" || server.arg("nearest") == "true";
 
   // Push into XY queue (FIFO)
-  xyQueue.push_back({gotoX, gotoY, isDead});
+  xyQueue.push_back({server.arg("x").toInt();, server.arg("y").toInt();, isDead});
   coordViveMode = true;
   if (gotoY < 4600) gotoY = 2100;
   server.send(200, "text/plain", "GoToPoint added to queue.");
