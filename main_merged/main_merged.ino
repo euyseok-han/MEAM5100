@@ -193,7 +193,7 @@ const int HIGH_TOWER_X = 2600;
 const int HIGH_TOWER_Y = 3570;
 
 const int NEXUS_Y_THRESHOLD = 4580;
-const int PRE_NEXUS_X = 4550;
+const int PRE_NEXUS_X = 4570;
 const int PRE_NEXUS_Y = 6000;
 const int NEXUS_X = 4600;
 const int NEXUS_Y = 6300;
