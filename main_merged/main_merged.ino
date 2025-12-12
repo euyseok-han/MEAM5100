@@ -1710,7 +1710,7 @@ void loop() {
       if(millis() - wallFollowTime > 3000 && robotY > 4800 && robotY < 5200){
         certainCount++;
       }
-      if(!wallDone && certainCount > 3 && robotY < HIGH_TOWER_Y_THRESHOLD){
+      if(!wallDone && certainCount > 2 && robotY < HIGH_TOWER_Y_THRESHOLD + 20){
         Serial.println(certainCount);
         autoWall = false;
         wallDone = true;
