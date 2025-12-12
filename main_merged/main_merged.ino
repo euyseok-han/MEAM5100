@@ -19,6 +19,10 @@
 #include <algorithm>
 #include <math.h>
 
+// Xbox Controller
+#include <Arduino.h>
+#include <BLEGamepadClient.h>
+
 #include "website.h"
 #include "vive510.h"
 #include "LobotSerialServoControl.h"
@@ -111,6 +115,9 @@ struct PIDController {
 
 PIDController leftPID;
 PIDController rightPID;
+
+// ========== XBOX CONTROLLER ==========
+XboxController controller;
 
 // ========== TOF (Code B) ==========
 Adafruit_VL53L0X frontTOF;
@@ -231,6 +238,7 @@ unsigned long lastTOFRead       = 0;
 unsigned long lastVive          = 0;
 unsigned long lastViveMove      = 0;
 unsigned long topHatUpdate      = 0;
+unsigned long xboxRead          = 0;
 
 const unsigned long CONTROL_PERIOD    = 2;
 const unsigned long SPEED_CALC_PERIOD = 2;
@@ -1489,6 +1497,8 @@ void setup() {
   server.on("/arm", handleArm);
   server.begin();
 
+  controller.begin();
+
   Wire.begin(I2C_SDA, I2C_SCL, 40000);
 
   setMultiplexerBus(TOF_FRONT_BUS);
@@ -1586,16 +1596,62 @@ void loop() {
 
   switch (controlMode) {
     case MODE_MANUAL:
-    if (millis() - lastPrint >= PRINT_PERIOD) {
+      // Debug Print
+      if (millis() - lastPrint >= PRINT_PERIOD) {
         Serial.printf("Control - target left: %.1f, terget right: %.1f -> Left: %.1f, Right: %.1f\n",
                   targetSpeed, rightTargetSpeed, currentSpeed, rightCurrentSpeed);
         lastPrint = millis();
       }
+
+      // Servo Arm Attack
       if(armAttacking){
         attackArm();
       } else if(!unloaded && millis() - servoReturn > 2000){
         BusServo.LobotSerialServoUnload(1);
         unloaded = true;
+      }
+
+      // Xbox Controller
+      if (millis() - xboxRead >= 500) {
+        if (controller.isConnected()) {
+          commandCount++;
+          float xboxSteer = 0;
+          float xboxSpeed = 0;
+          XboxControlsEvent e;
+          controller.read(&e);
+
+          if (e.leftStickX < -0.10 || e.leftStickX > 0.10) {
+            xboxSteer = e.leftStickX * 40.0;
+          } else {
+            xboxSteer = 0;
+          }
+          if (e.rightTrigger > 0.0){
+            xboxSpeed = e.rightTrigger * 60.0;
+          } else if (e.leftTrigger > 0.0){
+            xboxSpeed = e.leftTrigger * -60.0;
+          } else {
+            xboxSpeed = 0;
+          }
+
+          if(e.buttonA && !armAttacking){
+            armAttacking = true;
+            armOut = false;
+            Serial.println("Attacking arm");
+          }
+          if(e.buttonB && armAttacking){
+            armAttacking = false;
+            returnArm();
+            Serial.println("Returning arm");
+          }
+
+          targetSpeed = xboxSpeed + xboxSteer;
+          rightTargetSpeed = xboxSpeed - xboxSteer;
+
+          Serial.printf("lx: %.2f, ly: %.2f, rx: %.2f, ry: %.2f, lt: %.2f, rt: %.2f\n",
+                        e.leftStickX, e.leftStickY, e.rightStickX, e.rightStickY, e.leftTrigger, e.rightTrigger);
+        } else {
+          Serial.println("controller not connected");
+        }
       }
       robotX = 0;
       robotY = 0;
