@@ -161,7 +161,6 @@ unsigned long driveForward = 0;
 unsigned long wallFollowTime = 0;
 
 const int LOW_TOWER_Y_THRESHOLD = 5000;
-const int GOTO_POINT_THRESHOLD = 2150;
 const int PRE_LOW_TOWER_X = 4610;
 const int PRE_LOW_TOWER_Y = 5150;
 const int LOW_TOWER_X = 4610;
@@ -437,6 +436,7 @@ void rawSetMotorPWM(int pwm, int motorSide) {
 }
 
 void stopMotor() {
+  autoWall = true;
   targetSpeed        = 0;
   rightTargetSpeed   = 0;
   baseSpeed          = 0;
@@ -1079,6 +1079,12 @@ void handleWallPD() {
   server.send(200, "text/plain", "Wall PD updated");
 }
 
+void xyQueueClear() {
+  while (!xyQueue.empty()) xyQueue.pop_front();
+}
+void nodeQueueClear() {
+  while (!nodeQueue.empty()) nodeQueue.erase(nodeQueue.begin());
+}
 void handleMode() {
   commandCount++;
   if (!server.hasArg("m")) {
@@ -1093,8 +1099,8 @@ void handleMode() {
     autoWall = true;
     stopMotor();
     robotX = 0; robotY = 0;
-    xyQueue.clear();
-    nodeQueue.clear();
+    xyQueueClear();
+    nodeQueueClear();
   } else if (m == "wall") {
     controlMode    = MODE_WALL;
     autoWall = true;
@@ -1122,8 +1128,8 @@ void handleAttack() {
   String t = server.arg("target");
 
   // Clear queues so attack mode takes over immediately
-  nodeQueue.clear();
-  xyQueue.clear();
+  nodeQueueClear();
+  xyQueueClear();
   queuePaused = false;
 
   // Reset motion
@@ -1164,50 +1170,30 @@ void handleAttack() {
   }
 }
 
+int gotoY;
 
 void handleGoToPoint() {
   commandCount++;
   autoWall = true;
-  wallFollowTime = 0;
+  int gotoX = server.arg("x").toInt();
+  gotoY = server.arg("y").toInt();
+  if (gotoY < 4600) gotoY = 2100;
   controlMode = MODE_VIVE;
   readDualVive();
   if (!server.hasArg("x") || !server.hasArg("y")) {
     server.send(400, "text/plain", "Missing x or y");
     return;
   }
-  int x = server.arg("x").toInt();
-  int y = server.arg("y").toInt();
+  
   bool isDead = server.arg("dead") == "1" || server.arg("dead") == "true";
   bool isNearest = server.arg("nearest") == "1" || server.arg("nearest") == "true";
 
   // Push into XY queue (FIFO)
-  xyQueue.push_back({x, y, isDead});
-  coordViveMode = !isNearest;
-  if (isNearest){
-    int start = findNearestNode(robotX, robotY);
-    int goal = findNearestNode(x, y);
-    std::vector<int> route = graph.bfs(start, goal);
-    if (route.empty()) {
-      server.send(200, "text/plain", "NO ROUTE FOUND, but coord is added to XYqueue");
-      return;
-    }
-
-    size_t beginIndex = 0;
-    if (!nodeQueue.empty() && nodeQueue.back() == route[0]) {
-      beginIndex = 1;
-    }
-    for (size_t i = beginIndex; i < route.size(); ++i) {
-      nodeQueue.push_back(route[i]);
-    }
-
-    String s = "[";
-    for (size_t i = 0; i < nodeQueue.size(); ++i) {
-      s += String(nodeQueue[i]);
-      if (i + 1 < nodeQueue.size()) s += ",";
-    }
-    s += "]";
-    }
+  xyQueue.push_back({gotoX, gotoY, isDead});
+  coordViveMode = true;
+  
   server.send(200, "text/plain", "GoToPoint added to queue.");
+  wallFollowTime = millis();
 }
 
 // BFS route API: /route?goal=Y[&start=X]
@@ -1216,7 +1202,7 @@ void handleRoute() {
   controlMode = MODE_VIVE;
   rawStopMotor();
   coordViveMode = false;
-  xyQueue.clear();
+  xyQueueClear();
   if (!server.hasArg("goal")) {
     server.send(400, "text/plain", "Missing goal");
     return;
@@ -1286,8 +1272,8 @@ void handleRoute() {
 void handleQueueClear() {
   commandCount++;
   controlMode = MODE_MANUAL;
-  nodeQueue.clear();
-  xyQueue.clear();
+  nodeQueueClear();
+  xyQueueClear();
   stopMotor();
   server.send(200, "text/plain", "Queue cleared");
 }
@@ -1422,7 +1408,6 @@ void setup() {
   server.on("/gotopoint",   handleGoToPoint);
   server.on("/route",       handleRoute);
   server.on("/queue/clear", handleQueueClear);
-  server.on("/queue/skip",  handleQueueSkip);
   server.on("/queue/pause", handleQueuePause);
   server.on("/attack",      handleAttack);
   server.begin();
@@ -1519,9 +1504,29 @@ void loop() {
         computeVivePose();
         lastVive = millis();
       }
-      if (autowall){
-        if !(millis() - wallFollowTime > 2000 && robotY > GOTO_POINT_THRESHOLD) wallFollowPD();
-        else autowall = false;
+      if (autoWall){
+        if (!(millis() - wallFollowTime > 1000 && robotY > gotoY + 30)) {wallFollowPD();}
+        else {
+          rawStopMotor(); 
+          autoWall = false;
+
+          // if (goToY)
+          // int start = findNearestNode(robotX, robotY);
+          // int goal = findNearestNode(gotoX, gotoY);
+          // std::vector<int> route = graph.bfs(start, goal);
+          // if (route.empty()) {
+          //   server.send(200, "text/plain", "NO ROUTE FOUND, but coord is added to XYqueue");
+          //   return;
+          // }
+
+          // size_t beginIndex = 0;
+          // if (!nodeQueue.empty() && nodeQueue.back() == route[0]) {
+          //   beginIndex = 1;
+          // }
+          // for (size_t i = beginIndex; i < route.size(); ++i) {
+          //   nodeQueue.push_back(route[i]);
+          // }
+        }
       }
       else {
         if (millis() - lastViveMove >= VIVE_MOVE_PERIOD) {
@@ -1686,6 +1691,10 @@ void loop() {
   if (millis() - lastSpeedCalc >= SPEED_CALC_PERIOD) {
     calculateSpeed();
     lastSpeedCalc = millis();
+  }
+  if (controlMode == MODE_VIVE && autoWall){
+    updateMotorControl();
+    lastControlUpdate = millis();
   }
 
   if (millis() - lastControlUpdate >= CONTROL_PERIOD && controlMode != MODE_VIVE && autoWall) {
