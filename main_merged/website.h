@@ -312,6 +312,18 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <button onclick="attackHighTower()" style="flex:1; padding:14px;">Attack High Tower</button>
         <button onclick="attackNexus()"     style="flex:1; padding:14px;">Attack Nexus</button>
       </div>
+
+      <!-- ARM CONTROLS -->
+      <div class="panel arm-section" style="
+          background:#e6f7ff;
+          display:flex;
+          justify-content:space-between;
+          align-items:center;
+          gap:12px;
+      ">
+        <button onclick="returnArm()" style="flex:1; padding:14px;">Return Arm</button>
+        <button onclick="attackArm()" style="flex:1; padding:14px;">Attack Arm</button>
+      </div>
     </div>
   </div>
 
@@ -612,6 +624,14 @@ MODE  : ${data.mode}`;
 
     function attackNexus() {
       fetch('/attack?target=nexus');
+    }
+
+    function returnArm() {
+      fetch('/arm?cmd=return');
+    }
+
+    function attackArm() {
+      fetch('/arm?cmd=attack');
     }
 
     document.addEventListener('keydown', (e) => {

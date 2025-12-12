@@ -21,6 +21,7 @@
 
 #include "website.h"
 #include "vive510.h"
+#include "LobotSerialServoControl.h"
 
 // ========== PIN DEFINITIONS (ESP32-S3) ==========
 #define LEFT_MOTOR         0
@@ -46,6 +47,12 @@
 #define TOF_SIDE_BACK_BUS  2
 #define IMU_BUS            3
 #define TOP_HAT_BUS        4
+
+// Robot Arm Servo
+#define SERVO_SERIAL_RX    18
+#define SERVO_SERIAL_TX    17
+#define receiveEnablePin   13
+#define transmitEnablePin  14
 
 // Vive trackers (Code A style: left/right)
 #define VIVE_LEFT_PIN      4
@@ -75,6 +82,14 @@ float rightTargetSpeed   = 0;
 
 float baseSpeed          = 0;
 float steeringValue      = 0;
+
+// ========== SERVO ==========
+int lastServoMove = 0;
+int servoPos = 0;
+bool armOut = false;
+bool armAttacking = false;
+HardwareSerial HardwareSerial(2);
+LobotSerialServoControl BusServo(HardwareSerial,receiveEnablePin,transmitEnablePin);
 
 // ========== PID ==========
 struct PIDController {
@@ -502,6 +517,29 @@ void calculateSpeed() {
     lastEncoderCount      = encoderCount;
     rightLastEncoderCount = rightEncoderCount;
     lastSpeedCalc         = now;
+  }
+}
+
+// ========== SERVO ==========
+void returnArm() {
+  BusServo.LobotSerialServoMove(1,0,1500);
+}
+
+void attackArm() {
+  if(!armOut){
+    BusServo.LobotSerialServoMove(1,700,1500);
+    armOut = true;
+    servoPos = 1000;
+  } else {
+    if(millis() - lastServoMove > 2000){
+      if(servoPos == 400){
+        servoPos = 1000;
+      } else {
+        servoPos = 400;
+      }
+      BusServo.LobotSerialServoMove(1,servoPos,1500);
+      lastServoMove = millis();
+    }
   }
 }
 
@@ -1165,6 +1203,35 @@ void handleAttack() {
   }
 }
 
+// ======================= ARM CONTROL HANDLER ============================
+void handleArm() {
+  commandCount++;
+
+  if (!server.hasArg("cmd")) {
+    server.send(400, "text/plain", "Missing cmd");
+    return;
+  }
+
+  String cmd = server.arg("cmd");
+
+  // You can replace these with actual motor/servo commands later
+  if (cmd == "return") {
+    armAttacking = false;
+    returnArm();
+    Serial.println("ARM: Return arm command received");
+    server.send(200, "text/plain", "Arm returning");
+  }
+  else if (cmd == "attack") {
+    armAttacking = true;
+    armOut = false;
+    Serial.println("ARM: Attack arm command received");
+    server.send(200, "text/plain", "Arm attacking");
+  }
+  else {
+    server.send(400, "text/plain", "Unknown cmd");
+  }
+}
+
 
 void handleGoToPoint() {
   commandCount++;
@@ -1436,6 +1503,7 @@ void setup() {
   server.on("/queue/skip",  handleQueueSkip);
   server.on("/queue/pause", handleQueuePause);
   server.on("/attack",      handleAttack);
+  server.on("/arm", handleArm);
   server.begin();
 
   Wire.begin(I2C_SDA, I2C_SCL);
@@ -1475,12 +1543,17 @@ void setup() {
   viveLeft.begin();
   viveRight.begin();
 
+  BusServo.OnInit();
+  HardwareSerial.begin(115200,SERIAL_8N1,SERVO_SERIAL_RX,SERVO_SERIAL_TX);
+  delay(500);
+
   lastSpeedCalc     = millis();
   lastControlUpdate = millis();
   lastTOFRead       = millis();
   lastPrint         = millis();
   lastVive          = millis();
   topHatUpdate      = millis();
+  lastServoMove     = millis();
 
   // Graph nodes (from Code A)
     // Graph nodes (from Code A)
@@ -1530,6 +1603,9 @@ void loop() {
         Serial.printf("Control - target left: %.1f, terget right: %.1f -> Left: %.1f, Right: %.1f\n",
                   targetSpeed, rightTargetSpeed, currentSpeed, rightCurrentSpeed);
         lastPrint = millis();
+      }
+      if(armAttacking){
+        attackArm();
       }
       robotX = 0;
       robotY = 0;
