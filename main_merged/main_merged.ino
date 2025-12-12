@@ -21,6 +21,7 @@
 
 #include "website.h"
 #include "vive510.h"
+#include "LobotSerialServoControl.h"
 
 // ========== PIN DEFINITIONS (ESP32-S3) ==========
 #define LEFT_MOTOR         0
@@ -45,10 +46,19 @@
 #define TOF_SIDE_FRONT_BUS 1
 #define TOF_SIDE_BACK_BUS  2
 #define IMU_BUS            3
+#define TOP_HAT_BUS        4
+
+// Robot Arm Servo
+#define SERVO_SERIAL_RX    18
+#define SERVO_SERIAL_TX    17
+#define receiveEnablePin   13
+#define transmitEnablePin  14
 
 // Vive trackers (Code A style: left/right)
 #define VIVE_LEFT_PIN      4
 #define VIVE_RIGHT_PIN     5
+
+uint8_t health = 1;
 
 // ========== WIFI ==========
 const char* ssid = "TP-Link_8A8C";
@@ -74,6 +84,16 @@ float rightTargetSpeed   = 0;
 
 float baseSpeed          = 0;
 float steeringValue      = 0;
+
+// ========== SERVO ==========
+int lastServoMove = 0;
+int servoPos = 0;
+bool armOut = false;
+bool armAttacking = false;
+bool unloaded = true;
+unsigned long servoReturn = 0;
+HardwareSerial HardwareSerial(2);
+LobotSerialServoControl BusServo(HardwareSerial,receiveEnablePin,transmitEnablePin);
 
 // ========== PID ==========
 struct PIDController {
@@ -161,7 +181,6 @@ unsigned long driveForward = 0;
 unsigned long wallFollowTime = 0;
 
 const int LOW_TOWER_Y_THRESHOLD = 5000;
-const int GOTO_POINT_THRESHOLD = 2150;
 const int PRE_LOW_TOWER_X = 4610;
 const int PRE_LOW_TOWER_Y = 5150;
 const int LOW_TOWER_X = 4610;
@@ -211,6 +230,7 @@ unsigned long lastSpeedCalc     = 0;
 unsigned long lastTOFRead       = 0;
 unsigned long lastVive          = 0;
 unsigned long lastViveMove      = 0;
+unsigned long topHatUpdate      = 0;
 
 const unsigned long CONTROL_PERIOD    = 2;
 const unsigned long SPEED_CALC_PERIOD = 2;
@@ -437,6 +457,7 @@ void rawSetMotorPWM(int pwm, int motorSide) {
 }
 
 void stopMotor() {
+  autoWall = true;
   targetSpeed        = 0;
   rightTargetSpeed   = 0;
   baseSpeed          = 0;
@@ -450,7 +471,6 @@ void stopMotor() {
 void rawStopMotor() {
   rawSetMotorPWM(0, LEFT_MOTOR);
   rawSetMotorPWM(0, RIGHT_MOTOR);
-
   targetSpeed        = 0;
   rightTargetSpeed   = 0;
   baseSpeed          = 0;
@@ -501,6 +521,32 @@ void calculateSpeed() {
     lastEncoderCount      = encoderCount;
     rightLastEncoderCount = rightEncoderCount;
     lastSpeedCalc         = now;
+  }
+}
+
+// ========== SERVO ==========
+void returnArm() {
+  BusServo.LobotSerialServoMove(1,0,1500);
+  unloaded = false;
+  servoReturn = millis();
+}
+
+void attackArm() {
+  if(!armOut){
+    BusServo.LobotSerialServoMove(1,700,1500);
+    armOut = true;
+    servoPos = 1000;
+    lastServoMove = millis();
+  } else {
+    if(millis() - lastServoMove > 2000){
+      if(servoPos == 400){
+        servoPos = 1000;
+      } else {
+        servoPos = 400;
+      }
+      BusServo.LobotSerialServoMove(1,servoPos,1200);
+      lastServoMove = millis();
+    }
   }
 }
 
@@ -804,11 +850,11 @@ void hitTower(){
 }
 bool viveGoToPointStep() {
   if (!leftValid || !rightValid) {
-    stopMotor();
+    rawStopMotor();
     return false;
   }
   if (!vivePoseValid()) {
-    stopMotor();
+    rawStopMotor();
     return false;
   }
 
@@ -839,7 +885,7 @@ bool viveGoToPointStep() {
   const float DEG2RAD        = (float)M_PI / 180.0f;
   const float TURN_THRESHOLD = viveTargetDead ? (8.0f * DEG2RAD) : (25.0f * DEG2RAD);
   const float TURN_GAIN      = viveTargetDead ? 50.0f : 50.0f;
-  const int   TURN_LIMIT     = viveTargetDead ? 23 : 34;
+  const int   TURN_LIMIT     = viveTargetDead ? 23 : 25;
   
   if (fabs(err) > TURN_THRESHOLD) {
     float turnRaw = err * TURN_GAIN;
@@ -863,7 +909,7 @@ bool viveGoToPointStep() {
   // ---------------------------
   const float SPEED_GAIN = 20.0f;   // dist / 25 gives speed
   float bfsSpeed = dist / SPEED_GAIN;
-  bfsSpeed = constrain((int)bfsSpeed, 30, 70);
+  bfsSpeed = constrain((int)bfsSpeed, 30, 50);
 
   const float STEER_GAIN  = 40.0f;
   const int   STEER_LIMIT = 20.0;
@@ -885,15 +931,15 @@ bool viveGoToPointStep() {
 
 void followQueueStep() {
   if (!vivePoseValid()) {
-    stopMotor();
+    rawStopMotor();
     return;
   }
   if (queuePaused) {
-    stopMotor();
+    rawStopMotor();
     return;
   }
   if ( nodeQueue.empty()) {
-    stopMotor();
+    rawStopMotor();
     coordViveMode = true;
     return;
   }
@@ -917,11 +963,11 @@ void followQueueStep() {
 // Process coordinate-based XY queue (FIFO)
 void followXYQueueStep() {
   if (!vivePoseValid()) {
-    stopMotor();
+    rawStopMotor();
     return;
   }
   if (xyQueue.empty()) {
-    stopMotor();
+    rawStopMotor();
     coordViveMode = false;
     return;
   }
@@ -1079,6 +1125,16 @@ void handleWallPD() {
   server.send(200, "text/plain", "Wall PD updated");
 }
 
+void xyQueueClear() {
+  while (!xyQueue.empty()) xyQueue.pop_front();
+  viveTargetX = 0 ;
+  viveTargetY = 0 ;
+}
+void nodeQueueClear() {
+  while (!nodeQueue.empty()) nodeQueue.erase(nodeQueue.begin());
+  viveTargetX = 0 ;
+  viveTargetY = 0 ;   
+}
 void handleMode() {
   commandCount++;
   if (!server.hasArg("m")) {
@@ -1091,10 +1147,10 @@ void handleMode() {
     wallFollowMode = false;
     currentState  = STATE_IDLE;
     autoWall = true;
-    stopMotor();
+    rawStopMotor();
     robotX = 0; robotY = 0;
-    xyQueue.clear();
-    nodeQueue.clear();
+    xyQueueClear();
+    nodeQueueClear();
   } else if (m == "wall") {
     controlMode    = MODE_WALL;
     autoWall = true;
@@ -1122,8 +1178,8 @@ void handleAttack() {
   String t = server.arg("target");
 
   // Clear queues so attack mode takes over immediately
-  nodeQueue.clear();
-  xyQueue.clear();
+  nodeQueueClear();
+  xyQueueClear();
   queuePaused = false;
 
   // Reset motion
@@ -1164,50 +1220,55 @@ void handleAttack() {
   }
 }
 
+// ======================= ARM CONTROL HANDLER ============================
+void handleArm() {
+  commandCount++;
+
+  if (!server.hasArg("cmd")) {
+    server.send(400, "text/plain", "Missing cmd");
+    return;
+  }
+
+  String cmd = server.arg("cmd");
+
+  // You can replace these with actual motor/servo commands later
+  if (cmd == "return") {
+    armAttacking = false;
+    returnArm();
+    Serial.println("ARM: Return arm command received");
+    server.send(200, "text/plain", "Arm returning");
+  }
+  else if (cmd == "attack") {
+    armAttacking = true;
+    armOut = false;
+    Serial.println("ARM: Attack arm command received");
+    server.send(200, "text/plain", "Arm attacking");
+  }
+  else {
+    server.send(400, "text/plain", "Unknown cmd");
+  }
+}
+
+int gotoY;
 
 void handleGoToPoint() {
   commandCount++;
   autoWall = true;
-  wallFollowTime = 0;
+  gotoY = server.arg("y").toInt();
   controlMode = MODE_VIVE;
   readDualVive();
   if (!server.hasArg("x") || !server.hasArg("y")) {
     server.send(400, "text/plain", "Missing x or y");
     return;
   }
-  int x = server.arg("x").toInt();
-  int y = server.arg("y").toInt();
+  
   bool isDead = server.arg("dead") == "1" || server.arg("dead") == "true";
   bool isNearest = server.arg("nearest") == "1" || server.arg("nearest") == "true";
 
   // Push into XY queue (FIFO)
-  xyQueue.push_back({x, y, isDead});
-  coordViveMode = !isNearest;
-  if (isNearest){
-    int start = findNearestNode(robotX, robotY);
-    int goal = findNearestNode(x, y);
-    std::vector<int> route = graph.bfs(start, goal);
-    if (route.empty()) {
-      server.send(200, "text/plain", "NO ROUTE FOUND, but coord is added to XYqueue");
-      return;
-    }
-
-    size_t beginIndex = 0;
-    if (!nodeQueue.empty() && nodeQueue.back() == route[0]) {
-      beginIndex = 1;
-    }
-    for (size_t i = beginIndex; i < route.size(); ++i) {
-      nodeQueue.push_back(route[i]);
-    }
-
-    String s = "[";
-    for (size_t i = 0; i < nodeQueue.size(); ++i) {
-      s += String(nodeQueue[i]);
-      if (i + 1 < nodeQueue.size()) s += ",";
-    }
-    s += "]";
-    }
-  server.send(200, "text/plain", "GoToPoint added to queue.");
+  xyQueue.push_back({server.arg("x").toInt(), server.arg("y").toInt(), isDead});
+  coordViveMode = true;
+  wallFollowTime = millis();
 }
 
 // BFS route API: /route?goal=Y[&start=X]
@@ -1216,7 +1277,7 @@ void handleRoute() {
   controlMode = MODE_VIVE;
   rawStopMotor();
   coordViveMode = false;
-  xyQueue.clear();
+  xyQueueClear();
   if (!server.hasArg("goal")) {
     server.send(400, "text/plain", "Missing goal");
     return;
@@ -1284,11 +1345,12 @@ void handleRoute() {
 }
 
 void handleQueueClear() {
+  autoWall = false;
   commandCount++;
   controlMode = MODE_MANUAL;
-  nodeQueue.clear();
-  xyQueue.clear();
-  stopMotor();
+  nodeQueueClear();
+  xyQueueClear();
+  rawStopMotor();
   server.send(200, "text/plain", "Queue cleared");
 }
 
@@ -1422,12 +1484,12 @@ void setup() {
   server.on("/gotopoint",   handleGoToPoint);
   server.on("/route",       handleRoute);
   server.on("/queue/clear", handleQueueClear);
-  server.on("/queue/skip",  handleQueueSkip);
   server.on("/queue/pause", handleQueuePause);
   server.on("/attack",      handleAttack);
+  server.on("/arm", handleArm);
   server.begin();
 
-  Wire.begin(I2C_SDA, I2C_SCL);
+  Wire.begin(I2C_SDA, I2C_SCL, 40000);
 
   setMultiplexerBus(TOF_FRONT_BUS);
   if (!frontTOF.begin()) Serial.println("Front TOF init failed");
@@ -1464,11 +1526,17 @@ void setup() {
   viveLeft.begin();
   viveRight.begin();
 
+  BusServo.OnInit();
+  HardwareSerial.begin(115200,SERIAL_8N1,SERVO_SERIAL_RX,SERVO_SERIAL_TX);
+  delay(500);
+
   lastSpeedCalc     = millis();
   lastControlUpdate = millis();
   lastTOFRead       = millis();
   lastPrint         = millis();
   lastVive          = millis();
+  topHatUpdate      = millis();
+  lastServoMove     = millis();
 
   // Graph nodes (from Code A)
     // Graph nodes (from Code A)
@@ -1490,6 +1558,29 @@ void setup() {
 void loop() {
   server.handleClient();
 
+  if(millis() - topHatUpdate > 500){
+    setMultiplexerBus(TOP_HAT_BUS);
+    Wire.beginTransmission(0x28);
+    Wire.write(commandCount);
+    Wire.endTransmission();
+    commandCount = 0;
+
+    uint8_t cnt = Wire.requestFrom(0x28, 1);
+    if (cnt > 0) {
+      while(Wire.available()){
+        health = Wire.read();
+        Serial.print("Health: ");
+        Serial.println(health);
+      }
+    }
+    
+    // Robot is dead
+    if(health == 0){
+      stopMotor();
+    }
+    topHatUpdate = millis();
+  }
+
   readTOFSensors();
   updateGyroIntegration();
 
@@ -1499,6 +1590,12 @@ void loop() {
         Serial.printf("Control - target left: %.1f, terget right: %.1f -> Left: %.1f, Right: %.1f\n",
                   targetSpeed, rightTargetSpeed, currentSpeed, rightCurrentSpeed);
         lastPrint = millis();
+      }
+      if(armAttacking){
+        attackArm();
+      } else if(!unloaded && millis() - servoReturn > 2000){
+        BusServo.LobotSerialServoUnload(1);
+        unloaded = true;
       }
       robotX = 0;
       robotY = 0;
@@ -1519,9 +1616,29 @@ void loop() {
         computeVivePose();
         lastVive = millis();
       }
-      if (autowall){
-        if !(millis() - wallFollowTime > 2000 && robotY > GOTO_POINT_THRESHOLD) wallFollowPD();
-        else autowall = false;
+      if (autoWall){
+        if (!(millis() - wallFollowTime > 1100 && robotY > gotoY + 30)) {wallFollowPD();}
+        else {
+          rawStopMotor(); 
+          autoWall = false;
+
+          // if (goToY)
+          // int start = findNearestNode(robotX, robotY);
+          // int goal = findNearestNode(gotoX, gotoY);
+          // std::vector<int> route = graph.bfs(start, goal);
+          // if (route.empty()) {
+          //   server.send(200, "text/plain", "NO ROUTE FOUND, but coord is added to XYqueue");
+          //   return;
+          // }
+
+          // size_t beginIndex = 0;
+          // if (!nodeQueue.empty() && nodeQueue.back() == route[0]) {
+          //   beginIndex = 1;
+          // }
+          // for (size_t i = beginIndex; i < route.size(); ++i) {
+          //   nodeQueue.push_back(route[i]);
+          // }
+        }
       }
       else {
         if (millis() - lastViveMove >= VIVE_MOVE_PERIOD) {
@@ -1593,7 +1710,7 @@ void loop() {
       if(millis() - wallFollowTime > 3000 && robotY > 4800 && robotY < 5200){
         certainCount++;
       }
-      if(!wallDone && certainCount > 3 && robotY < HIGH_TOWER_Y_THRESHOLD){
+      if(!wallDone && certainCount > 2 && robotY < HIGH_TOWER_Y_THRESHOLD + 20){
         Serial.println(certainCount);
         autoWall = false;
         wallDone = true;
@@ -1686,6 +1803,10 @@ void loop() {
   if (millis() - lastSpeedCalc >= SPEED_CALC_PERIOD) {
     calculateSpeed();
     lastSpeedCalc = millis();
+  }
+  if (controlMode == MODE_VIVE && autoWall){
+    updateMotorControl();
+    lastControlUpdate = millis();
   }
 
   if (millis() - lastControlUpdate >= CONTROL_PERIOD && controlMode != MODE_VIVE && autoWall) {
