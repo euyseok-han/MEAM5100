@@ -182,13 +182,13 @@ unsigned long wallFollowTime = 0;
 
 
 
-
+// coords!!!!!
 
 
 const int LOW_TOWER_Y_THRESHOLD = 4600;
 const int PRE_LOW_TOWER_X = 4600;
 const int PRE_LOW_TOWER_Y = 4600;
-const int LOW_TOWER_X = 4600;
+const int LOW_TOWER_X = 4700;
 const int LOW_TOWER_Y = 4400;
 
 const int HIGH_TOWER_Y_THRESHOLD = 4100;
@@ -198,7 +198,7 @@ const int HIGH_TOWER_Y = 3550;
 const int PRE_HIGH_TOWER_X = 3140;
 const int PRE_HIGH_TOWER_Y = 3550;
 
-const int NEXUS_Y_THRESHOLD = 4580;
+const int NEXUS_Y_THRESHOLD = 4540;
 const int PRE_NEXUS_X = 4720;
 const int PRE_NEXUS_Y = 6090;
 const int NEXUS_X = 4760;
@@ -980,7 +980,7 @@ bool viveGoToPointStep() {
     turn    = constrain((int)turnRaw, -TURN_LIMIT, TURN_LIMIT);
     }
 
-    rawSetMotorPWM( -turn/Faster, LEFT_MOTOR);
+    rawSetMotorPWM( -turn/Faster*1.2, LEFT_MOTOR);
     rawSetMotorPWM( turn/Faster, RIGHT_MOTOR);
     return false;  // still turning
   }
@@ -1008,7 +1008,7 @@ bool viveGoToPointStep() {
   float leftCmd  = bfsSpeed - steer;
   float rightCmd = bfsSpeed + steer;
   rawSetMotorPWM(leftCmd, LEFT_MOTOR);
-  rawSetMotorPWM( rightCmd, RIGHT_MOTOR);
+  rawSetMotorPWM( rightCmd * 0.95, RIGHT_MOTOR);
   return false;
 }
 
@@ -1286,12 +1286,14 @@ void handleAttack() {
   // Reset motion
   stopMotor();
   wallDone = false;
+  viveDone = false;
   autoWall = true;
   coordViveMode = true;   // attacks always use coordinate navigation
   wasBackward = false;
   nexusStraight = false;
   certainCount = 0;
   wallFollowTime = millis();
+  driveForward = 0;  // clear any prior forward timers
   
   if (t == "lowtower") {
     Serial.println("Attacking low tower");
@@ -1764,39 +1766,59 @@ void loop() {
       break;
 
     case MODE_LOW_TOWER:
-      if (millis() - lastVive >= VIVE_READ_PERIOD) {
-        readDualVive();
-        computeVivePose();
-        lastVive = millis();
+  if (millis() - lastVive >= VIVE_READ_PERIOD) {
+    readDualVive();
+    computeVivePose();
+    lastVive = millis();
+  }
+
+  // stage 1: wall-follow until threshold (only once)
+  if (!wallDone && millis() - wallFollowTime > 2000 && robotY > LOW_TOWER_Y_THRESHOLD) {
+    autoWall = false;
+    wallDone = true;
+    targetSpeed = 0;
+    rightTargetSpeed = 0;
+    Serial.println("[LOW] Wall done -> switching to Vive");
+  }
+
+  // stage 1 motion
+  if (autoWall && !viveDone) {
+    wallFollowPD();
+  }
+  // stage 2: Vive XY queue
+  else if (!viveDone) {
+    if (millis() - lastViveMove >= VIVE_MOVE_PERIOD) {
+      followXYQueueStep();
+
+      if (xyQueue.empty()) {
+        Serial.println("[LOW] Vive done -> forward escape");
+        viveDone = true;
+        autoWall = true;
+        driveForward = millis();
       }
 
-      if (autoWall) {
-        wallFollowPD();
-
-        if (millis() - wallFollowTime > 2000 && robotY > LOW_TOWER_Y_THRESHOLD) {
-          autoWall = false;
-          targetSpeed = 0;
-          rightTargetSpeed = 0;
-        }
+      lastViveMove = millis();
+    }
+  }
+  // stage 3: forward escape for N seconds then stop
+  else {
+    if (millis() - driveForward < 30000) {
+      if (wasBackward) {
+        targetSpeed = -25;
+        rightTargetSpeed = -25;
       } else {
-        if (millis() - lastViveMove >= VIVE_MOVE_PERIOD) {
-          followXYQueueStep();
-          if (xyQueue.empty()) {
-            autoWall = true;
-            driveForward = millis();
-          }
-          lastViveMove = millis();
-        }
+        targetSpeed = 25;
+        rightTargetSpeed = 25;
       }
-
-      if (autoWall && driveForward != 0 && millis() - driveForward >= 15000) {
-        controlMode   = MODE_MANUAL;
-        wallFollowMode = false;
-        currentState  = STATE_IDLE;
-        stopMotor();
-        robotX = 0; robotY = 0;
-      }
-      break;
+    } else {
+      controlMode   = MODE_MANUAL;
+      wallFollowMode = false;
+      currentState  = STATE_IDLE;
+      stopMotor();
+      robotX = 0; robotY = 0;
+    }
+  }
+  break;
 
     case MODE_NEXUS:
       if (millis() - lastVive >= VIVE_READ_PERIOD) {
@@ -1858,7 +1880,7 @@ void loop() {
       if(millis() - wallFollowTime > 3000 && robotY > 4800 && robotY < 5200){
         certainCount++;
       }
-      if(!wallDone && certainCount > 3 && robotY < HIGH_TOWER_Y_THRESHOLD){
+      if(!wallDone && certainCount > 1 && robotY < HIGH_TOWER_Y_THRESHOLD){
         Serial.println(certainCount);
         autoWall = false;
         wallDone = true;
