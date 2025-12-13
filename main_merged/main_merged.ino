@@ -965,7 +965,7 @@ bool viveGoToPointStep() {
   const float DEG2RAD        = (float)M_PI / 180.0f;
   const float TURN_THRESHOLD = viveTargetDead ? (8.0f * DEG2RAD) : (25.0f * DEG2RAD);
   const float TURN_GAIN      = viveTargetDead ? 50.0f : 50.0f;
-  const float   TURN_LIMIT     = viveTargetDead ? 25.5 : 25.5;
+  const float   TURN_LIMIT     = viveTargetDead ? 23.0 : 25.5;
   int turnErrorTime = 0;
   if (fabs(err) > TURN_THRESHOLD) {
     turnErrorTime ++;
@@ -975,8 +975,8 @@ bool viveGoToPointStep() {
     }
     else {
     float turnRaw = err * TURN_GAIN;
-    if (40 > turnRaw && turnRaw >= 0) turnRaw = 25.5;
-    if (-40 < turnRaw && turnRaw < 0) turnRaw = -25.5;
+    if (23> turnRaw && turnRaw >= 0) turnRaw = 23;
+    if (-23 < turnRaw && turnRaw < 0) turnRaw = -23;
     turn    = constrain((int)turnRaw, -TURN_LIMIT, TURN_LIMIT);
     }
 
