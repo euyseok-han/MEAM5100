@@ -185,10 +185,10 @@ unsigned long wallFollowTime = 0;
 
 
 const int LOW_TOWER_Y_THRESHOLD = 4600;
-const int PRE_LOW_TOWER_X = 4600;
-const int PRE_LOW_TOWER_Y = 4600;
-const int LOW_TOWER_X = 4650;
-const int LOW_TOWER_Y = 4400;
+const int PRE_LOW_TOWER_X = 4730;
+const int PRE_LOW_TOWER_Y = 4320;
+const int LOW_TOWER_X = 4800;
+const int LOW_TOWER_Y = 4000;
 
 const int HIGH_TOWER_Y_THRESHOLD = 4100;
 const int HIGH_TOWER_X = 2700;
@@ -1089,10 +1089,16 @@ void handleRoot() {
 
 void handleSetSpeed() {
   commandCount++;
+
   if (server.hasArg("speed") && server.hasArg("steering")) {
    
     baseSpeed     = server.arg("speed").toFloat();
     steeringValue = server.arg("steering").toFloat();
+
+    if(baseSpeed == 0 && steeringValue == 0){
+      leftPID.integral = 0;
+      rightPID.integral = 0;
+    }
 
     if (fabs(steeringValue) <= 5) steeringValue *= 1.4f;
     if (fabs(baseSpeed)    <= 10) baseSpeed     *= 1.4f;
