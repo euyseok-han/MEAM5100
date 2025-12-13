@@ -382,6 +382,7 @@ void resetYaw() {
   lastGyroTime = millis();
 }
 bool viveDone = false;
+bool nexusTurn = false;
 bool vivePoseValid() {
   return !(robotX == 0 && robotY == 0);
 }
@@ -1318,6 +1319,7 @@ void handleAttack() {
     Serial.println("Attacking nexus");
     controlMode = MODE_NEXUS;
     hitNexus = false;
+    nexusTurn = false;
     xyQueue.push_back({PRE_NEXUS_X, PRE_NEXUS_Y, false, false});
     xyQueue.push_back({NEXUS_X, NEXUS_Y, true, false});
     server.send(200, "text/plain", "Mode set: NEXUS");
@@ -1826,47 +1828,18 @@ void loop() {
   break;
 
     case MODE_NEXUS:
-      if (millis() - lastVive >= VIVE_READ_PERIOD) {
-        readDualVive();
-        computeVivePose();
-        lastVive = millis();
-      }
-      if(autoWall && millis() - wallFollowTime > 2000 && robotY > NEXUS_Y_THRESHOLD){
-        autoWall = false;
-        targetSpeed = 0;
-        rightTargetSpeed = 0;
-      }
-      if(autoWall && !viveDone){
+      if(autoWall && !nexusTurn){
         wallFollowPD();
-      } else if(!viveDone){
-        if (millis() - lastViveMove >= VIVE_MOVE_PERIOD) {
-          followXYQueueStep();
-          if (xyQueue.empty()) {
-            viveDone = true;
-            autoWall = true;
-            nexusStraight=false;
-            if(wasBackward){
-              targetSpeed = -23;
-              rightTargetSpeed = -23;
-            } else {
-              targetSpeed = 23;
-              rightTargetSpeed = 23;
-            }
-            driveForward = millis();
-
-          }
-          lastViveMove = millis();
+        if(frontDistance < 120){
+          nexusTurn = true;
+          targetTurnAngle = 60;
+          stopMotor();
+          resetYaw();
         }
-      } else{
-        if(!nexusStraight && millis() - driveForward > 5000){
-          targetSpeed = 0;
-          rightTargetSpeed = 0;
-          autoWall = false;
-          nexusStraight = true;
-        }
-        if(nexusStraight && !hitNexus){
+      } else if(nexusTurn){
+        if(turnByAngle(targetTurnAngle)){
           hitTower();
-        } else if (hitNexus) {
+        } else if(hitNexus){
           controlMode   = MODE_MANUAL;
           wallFollowMode = false;
           autoWall = true;
