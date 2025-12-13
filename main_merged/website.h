@@ -333,6 +333,25 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     let currentSteering = 0;
     let wallPrefilled = false;
 
+    // Press-and-hold driving constants and key state
+    const DRIVE_SPEED = 50;   // forward speed when holding Up
+    const STEER_SPEED = 20;   // steering magnitude when holding Left/Right
+    const keyState = { up: false, down: false, left: false, right: false };
+
+    function recomputeDriveFromKeys() {
+      let speed = 0;
+      let steer = 0;
+
+      if (keyState.up)   speed = DRIVE_SPEED;
+      if (keyState.down) speed = -DRIVE_SPEED;
+
+      if (keyState.left)  {steer = -STEER_SPEED;
+      }
+      if (keyState.right) steer =  STEER_SPEED;
+      if (steer) speed = speed / 2; 
+      setControl(speed, steer);
+    }
+
     // ================== DIRECTION INDICATOR ==================
     function updateDirectionIndicator(speed, steering) {
       const d = document.getElementById('direction');
@@ -654,17 +673,13 @@ MODE  : ${data.mode}`;
     }
 
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'ArrowUp') {
-        currentSpeed = Math.min(120, currentSpeed + 10);
-      }
-      if (e.key === 'ArrowDown') {
-        currentSpeed = Math.max(-120, currentSpeed - 10);
-      }
-      if (e.key === 'ArrowLeft') {
-        currentSteering = Math.max(-60, currentSteering - 5);
-      }
-      if (e.key === 'ArrowRight') {
-        currentSteering = Math.min(60, currentSteering + 5);
+      if (e.repeat) return; // prevent auto-repeat
+
+      switch (e.key) {
+        case 'ArrowUp':    keyState.up = true;    recomputeDriveFromKeys(); break;
+        case 'ArrowDown':  keyState.down = true;  recomputeDriveFromKeys(); break;
+        case 'ArrowLeft':  keyState.left = true;  recomputeDriveFromKeys(); break;
+        case 'ArrowRight': keyState.right = true; recomputeDriveFromKeys(); break;
       }
 
       if (e.key === 's' || e.key === 'S') {
@@ -706,6 +721,18 @@ MODE  : ${data.mode}`;
       document.getElementById('speedSlider').value = currentSpeed;
       document.getElementById('steeringSlider').value = currentSteering;
       updateControlLocal();
+    });
+
+    // Stop or adjust on key release
+    document.addEventListener('keyup', (e) => {
+      switch (e.key) {
+        case 'ArrowUp':    keyState.up = false;    break;
+        case 'ArrowDown':  keyState.down = false;  break;
+        case 'ArrowLeft':  keyState.left = false;  break;
+        case 'ArrowRight': keyState.right = false; break;
+        default: return;
+      }
+      recomputeDriveFromKeys();
     });
 
     // Enter on BFS inputs = "Add Route"
