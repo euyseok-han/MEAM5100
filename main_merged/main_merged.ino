@@ -648,7 +648,9 @@ bool turnByAngle(float targetAngle) {
   const float maxTurnSpeed   = 50;
 
   if (fabs(angleError) < angleTolerance) {
-    stopMotor();
+    // stopMotor();
+    targetSpeed = 0;
+    rightTargetSpeed = 0;
     return true;
   }
 
@@ -755,13 +757,14 @@ void updateStateMachine() {
         stopMotor();
         updateGyroIntegration();
         resetYaw();
-        targetTurnAngle = 70;
-      } else if (rightDistance2 > WALL_LOST_THRESHOLD) {
-        currentState = STATE_BLIND_FORWARD;
-        stateStartTime = millis();
-        targetSpeed      = wallFollowSpeed * 0.6;
-        rightTargetSpeed = wallFollowSpeed * 0.6;
-      }
+        targetTurnAngle = 60;
+      } 
+      // else if (rightDistance2 > WALL_LOST_THRESHOLD) {
+      //   currentState = STATE_BLIND_FORWARD;
+      //   stateStartTime = millis();
+      //   targetSpeed      = wallFollowSpeed * 0.6;
+      //   rightTargetSpeed = wallFollowSpeed * 0.6;
+      // }
       break;
 
     case STATE_INNER_CORNER:
