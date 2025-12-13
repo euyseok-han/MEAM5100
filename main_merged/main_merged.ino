@@ -131,8 +131,8 @@ constexpr uint16_t MAX_SAMPLES = PLAYBACK_PERIOD_MS / SAMPLE_PERIOD_MS;
 XboxSample bufferA[MAX_SAMPLES];
 XboxSample bufferB[MAX_SAMPLES];
 
-volatile XboxSample* recordBuf = bufferA;
-volatile XboxSample* playBuf   = bufferB;
+XboxSample* recordBuf = bufferA;
+XboxSample* playBuf   = bufferB;
 
 volatile uint16_t recordCount = 0;
 volatile uint16_t playIndex   = 0;
@@ -153,6 +153,7 @@ int rightDistance2 = 0;
 
 // ========== IMU (Code B) ==========
 Adafruit_MPU6050 mpu;
+float yAccel         = 0;
 float currentAngle   = 0;
 float gyroZOffset    = 0;
 unsigned long lastGyroTime = 0;
@@ -262,6 +263,7 @@ unsigned long lastVive          = 0;
 unsigned long lastViveMove      = 0;
 unsigned long topHatUpdate      = 0;
 unsigned long xboxRead          = 0;
+unsigned long xboxNow           = 0;
 
 const unsigned long CONTROL_PERIOD    = 2;
 const unsigned long SPEED_CALC_PERIOD = 2;
@@ -640,6 +642,7 @@ float readGyroZdeg() {
   setMultiplexerBus(IMU_BUS);
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
+  yAccel = a.acceleration.y;
   float gyroZ = (g.gyro.z - gyroZOffset) * 57.2958f;
   filteredGyroZ = GYRO_ALPHA * filteredGyroZ + (1.0 - GYRO_ALPHA) * gyroZ;
   if (fabs(filteredGyroZ) < GYRO_DEADBAND) return 0.0;
@@ -1674,7 +1677,7 @@ void loop() {
   switch (controlMode) {
     case MODE_MANUAL:
       // Debug Print
-      if (millis() - lastPrint >= PRINT_PERIOD) {
+      if (millis() - lastPrint >= 50) {
         Serial.printf("Control - target left: %.1f, terget right: %.1f -> Left: %.1f, Right: %.1f\n",
                   targetSpeed, rightTargetSpeed, currentSpeed, rightCurrentSpeed);
         lastPrint = millis();
@@ -1689,7 +1692,7 @@ void loop() {
       }
 
       // Xbox Controller
-      unsigned long xboxNow = millis();
+      xboxNow = millis();
       if(xboxNow - lastSampleTime >= SAMPLE_PERIOD_MS) {
         sampleXbox();
         lastSampleTime = xboxNow;
