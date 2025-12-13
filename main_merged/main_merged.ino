@@ -198,11 +198,11 @@ const int HIGH_TOWER_Y = 3550;
 const int PRE_HIGH_TOWER_X = 3140;
 const int PRE_HIGH_TOWER_Y = 3550;
 
-const int NEXUS_Y_THRESHOLD = 4540;
+const int NEXUS_Y_THRESHOLD = 4040;
 const int PRE_NEXUS_X = 4720;
-const int PRE_NEXUS_Y = 6090;
-const int NEXUS_X = 4760;
-const int NEXUS_Y = 6500;
+const int PRE_NEXUS_Y = 5950;
+const int NEXUS_X = 4590;
+const int NEXUS_Y = 6600;
 
 
 
@@ -651,6 +651,8 @@ bool turnByAngle(float targetAngle) {
     // stopMotor();
     targetSpeed = 0;
     rightTargetSpeed = 0;
+    leftPID.integral   = 0;
+    rightPID.integral  = 0;
     return true;
   }
 
@@ -953,19 +955,19 @@ bool viveGoToPointStep() {
     rawStopMotor();
     return true;
   }
+  const float DEG2RAD        = (float)M_PI / 180.0f;
   float desiredForward  = atan2f(dy, dx);
   float desiredBackward = desiredForward + (float)M_PI;
   if (desiredBackward > (float)M_PI) desiredBackward -= 2.0f * (float)M_PI;
   float errF = normalizeAngle(desiredForward  - robotHeading);
   float errB = normalizeAngle(desiredBackward - robotHeading);
 
-  wasBackward = (fabs(errB) < fabs(errF));
+  wasBackward = (fabs(errB) + 17.0f * DEG2RAD < fabs(errF));
   float err = wasBackward ? errB : errF;
   desiredHeading = wasBackward ? desiredBackward : desiredForward;
   // ---------------------------
   // ALIGNMENT
   // ---------------------------
-  const float DEG2RAD        = (float)M_PI / 180.0f;
   const float TURN_THRESHOLD = viveTargetDead ? (8.0f * DEG2RAD) : (25.0f * DEG2RAD);
   const float TURN_GAIN      = viveTargetDead ? 50.0f : 50.0f;
   const float   TURN_LIMIT     = viveTargetDead ? 23.0 : 25.5;
@@ -973,7 +975,7 @@ bool viveGoToPointStep() {
   if (fabs(err) > TURN_THRESHOLD) {
     turnErrorTime ++;
     float turn;
-    if (turnErrorTime > 50){
+    if (turnErrorTime > 1000){
       turn = 50;
     }
     else {
@@ -998,7 +1000,7 @@ bool viveGoToPointStep() {
   // ---------------------------
   const float SPEED_GAIN = 20.0f;   // dist / 25 gives speed
   float bfsSpeed = dist / SPEED_GAIN;
-  bfsSpeed = constrain((int)bfsSpeed, 30, 49);
+  bfsSpeed = constrain((int)bfsSpeed, 30, 45);
 
   const float STEER_GAIN  = 40.0f;
   const int   STEER_LIMIT = 20.0;
@@ -1010,8 +1012,8 @@ bool viveGoToPointStep() {
   // Compute wheel commands
   float leftCmd  = bfsSpeed - steer;
   float rightCmd = bfsSpeed + steer;
-  rawSetMotorPWM(leftCmd, LEFT_MOTOR);
-  rawSetMotorPWM( rightCmd * 0.95, RIGHT_MOTOR);
+  rawSetMotorPWM(leftCmd*1.05, LEFT_MOTOR);
+  rawSetMotorPWM( rightCmd*0.95, RIGHT_MOTOR);
   return false;
 }
 
@@ -1672,7 +1674,7 @@ void setup() {
 // ========== LOOP ==========
 void loop() {
   server.handleClient();
-
+  printViveState();
   if(millis() - topHatUpdate > 500){
     setMultiplexerBus(TOP_HAT_BUS);
     Wire.beginTransmission(0x28);
@@ -1844,11 +1846,11 @@ void loop() {
             autoWall = true;
             driveForward = millis();
             if(wasBackward){
-              targetSpeed = -20;
-              rightTargetSpeed = -20;
+              targetSpeed = -28;
+              rightTargetSpeed = -19;
             } else {
-              targetSpeed = 20;
-              rightTargetSpeed = 20;
+              targetSpeed = 28;
+              rightTargetSpeed = 19;
             }
           }
           lastViveMove = millis();
