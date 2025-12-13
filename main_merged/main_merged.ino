@@ -382,6 +382,7 @@ void resetYaw() {
   lastGyroTime = millis();
 }
 bool viveDone = false;
+bool nexusWall = false;
 bool nexusTurn = false;
 bool vivePoseValid() {
   return !(robotX == 0 && robotY == 0);
@@ -1320,6 +1321,7 @@ void handleAttack() {
     controlMode = MODE_NEXUS;
     hitNexus = false;
     nexusTurn = false;
+    nexusWall = false;
     xyQueue.push_back({PRE_NEXUS_X, PRE_NEXUS_Y, false, false});
     xyQueue.push_back({NEXUS_X, NEXUS_Y, true, false});
     server.send(200, "text/plain", "Mode set: NEXUS");
@@ -1828,25 +1830,31 @@ void loop() {
   break;
 
     case MODE_NEXUS:
-      if(autoWall && !nexusTurn){
+      if(autoWall && !nexusWall){
         wallFollowPD();
         if(frontDistance < 120){
-          nexusTurn = true;
-          targetTurnAngle = 60;
+          nexusWall = true;
           stopMotor();
+          updateGyroIntegration();
+          resetYaw();
+          targetTurnAngle = 60;
+        }
+      } else if(nexusWall){
+        if(turnByAngle(targetTurnAngle)){
+          nexusWall = false;
+          autoWall = false;
+          nexusTurn = true;
           resetYaw();
         }
       } else if(nexusTurn){
-        if(turnByAngle(targetTurnAngle)){
-          hitTower();
-        } else if(hitNexus){
-          controlMode   = MODE_MANUAL;
-          wallFollowMode = false;
-          autoWall = true;
-          currentState  = STATE_IDLE;
-          stopMotor();
-          robotX = 0; robotY = 0;
-        }
+        hitTower();
+      } else if(hitNexus){
+        controlMode   = MODE_MANUAL;
+        wallFollowMode = false;
+        autoWall = true;
+        currentState  = STATE_IDLE;
+        stopMotor();
+        robotX = 0; robotY = 0;
       }
       break;
 
