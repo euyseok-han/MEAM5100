@@ -90,6 +90,7 @@ int lastServoMove = 0;
 int servoPos = 0;
 bool armOut = false;
 bool armAttacking = false;
+bool wallDone = false;
 bool unloaded = true;
 unsigned long servoReturn = 0;
 HardwareSerial HardwareSerial(2);
@@ -195,7 +196,7 @@ const int HIGH_TOWER_X = 2700;
 const int HIGH_TOWER_Y = 3550;
 // Pre-approach waypoint for high tower (fallback: same as target to avoid compile errors)
 const int PRE_HIGH_TOWER_X = 3140;
-const int PRE_HIGH_TOWER_Y = 3600;
+const int PRE_HIGH_TOWER_Y = 3550;
 
 const int NEXUS_Y_THRESHOLD = 4580;
 const int PRE_NEXUS_X = 4720;
@@ -1284,6 +1285,7 @@ void handleAttack() {
 
   // Reset motion
   stopMotor();
+  wallDone = false;
   autoWall = true;
   coordViveMode = true;   // attacks always use coordinate navigation
   wasBackward = false;
@@ -1846,39 +1848,38 @@ void loop() {
       }
       break;
 
+    
     case MODE_HIGH_TOWER:
       if (millis() - lastVive >= VIVE_READ_PERIOD) {
         readDualVive();
         computeVivePose();
         lastVive = millis();
       }
-      if (millis() - wallFollowTime > 2000 && robotY > 3620 && robotY < HIGH_TOWER_Y_THRESHOLD) {
+      if(millis() - wallFollowTime > 3000 && robotY > 4800 && robotY < 5200){
         certainCount++;
       }
-      else certainCount = 0;
-      
-      if (autoWall) {
-        if (certainCount > 1) {
-          autoWall = false;
-          targetSpeed = 0;
-          rightTargetSpeed = 0;
-        }
-        else wallFollowPD();
-        
-      } else {
+      if(!wallDone && certainCount > 3 && robotY < HIGH_TOWER_Y_THRESHOLD){
+        Serial.println(certainCount);
+        autoWall = false;
+        wallDone = true;
+        targetSpeed = 0;
+        rightTargetSpeed = 0;
+      }
+      if(autoWall && !viveDone){
+        wallFollowPD();
+      } else if(!viveDone){
         if (millis() - lastViveMove >= VIVE_MOVE_PERIOD) {
           followXYQueueStep();
           if (xyQueue.empty()) {
+            viveDone = true;
             autoWall = true;
             driveForward = millis();
           }
           lastViveMove = millis();
         }
-      }
-
-      if (autoWall && driveForward != 0) {
-        if (millis() - driveForward < 18000) {
-          if (wasBackward) {
+      } else{
+        if(millis() - driveForward < 18000){
+          if(wasBackward){
             targetSpeed = -20;
             rightTargetSpeed = -20;
           } else {
