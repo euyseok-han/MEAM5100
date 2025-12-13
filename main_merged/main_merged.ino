@@ -181,14 +181,13 @@ unsigned long driveForward = 0;
 unsigned long wallFollowTime = 0;
 
 
-
 // coords!!!!!
 
 
 const int LOW_TOWER_Y_THRESHOLD = 4600;
 const int PRE_LOW_TOWER_X = 4600;
 const int PRE_LOW_TOWER_Y = 4600;
-const int LOW_TOWER_X = 4700;
+const int LOW_TOWER_X = 4650;
 const int LOW_TOWER_Y = 4400;
 
 const int HIGH_TOWER_Y_THRESHOLD = 4100;
@@ -202,7 +201,7 @@ const int NEXUS_Y_THRESHOLD = 4040;
 const int PRE_NEXUS_X = 4720;
 const int PRE_NEXUS_Y = 5950;
 const int NEXUS_X = 4590;
-const int NEXUS_Y = 6600;
+const int NEXUS_Y = 6300;
 
 
 
@@ -897,13 +896,17 @@ void computeVivePose() {
 
 void pushTower(){
   int hitSpeed = wasBackward ? -30 * Faster : 30 * Faster;
-  rawSetMotorPWM( hitSpeed, LEFT_MOTOR);
-  rawSetMotorPWM( hitSpeed, RIGHT_MOTOR);
-  
+  if (controlMode == MODE_HIGH_TOWER) {
+    targetSpeed = hitSpeed;
+  rightTargetSpeed = hitSpeed;  
+  }
+  else{
+  targetSpeed = hitSpeed;
+  rightTargetSpeed = hitSpeed;}
   if (controlMode == LAST_TASK) {hitSpeed = hitSpeed * Faster; delay(1000);}
   else delay(4000);
-  rawSetMotorPWM(-hitSpeed, LEFT_MOTOR);
-  rawSetMotorPWM(-hitSpeed, RIGHT_MOTOR);
+  targetSpeed = -hitSpeed;
+  rightTargetSpeed = -hitSpeed;
   delay(600);
   rawStopMotor();
 }
@@ -914,21 +917,20 @@ void spin(int t=500){
   delay(t);
 }
 void hitTower(){
-  int hitSpeed = wasBackward ? -40 : 40;
+  int hitSpeed = wasBackward ? -23 : 23;
 
   uint8_t hitTimes = 6;
-
+  autoWall = false;
   for (int k = 0; k < hitTimes; k++) {
-    rawSetMotorPWM( hitSpeed, LEFT_MOTOR);
-    rawSetMotorPWM( hitSpeed, RIGHT_MOTOR);
-    if (k==0) delay(5000);
-    else delay(800);
-    rawSetMotorPWM(-hitSpeed, LEFT_MOTOR);
-    rawSetMotorPWM(-hitSpeed, RIGHT_MOTOR);
+    rawSetMotorPWM(hitSpeed*Faster, LEFT_MOTOR);
+    rawSetMotorPWM(hitSpeed*Faster, RIGHT_MOTOR);
+    // if (k==0) delay(5000);
+    delay(800);
+    rawSetMotorPWM(-hitSpeed*Faster, LEFT_MOTOR);
+    rawSetMotorPWM(-hitSpeed*Faster, RIGHT_MOTOR);
     delay(100);
   }
-  rawSetMotorPWM(0, LEFT_MOTOR);
-  rawSetMotorPWM(0, RIGHT_MOTOR);
+  stopMotor();
 
   hitNexus = true;
   rawStopMotor();
@@ -1039,11 +1041,10 @@ void followQueueStep() {
   isPush = graph.nodes[currentNode].push;
   if (viveGoToPointStep()) correctTime ++;
   else correctTime = 0;
-  uint8_t correctThreshold = viveTargetDead ? 4 : 0;
+  uint8_t correctThreshold = viveTargetDead ? 3 : 0;
   if (correctTime > correctThreshold) {
     if (viveTargetDead) {
-      if (isPush) pushTower();
-      else hitTower();
+      if (isPush && controlMode == MODE_HIGH_TOWER) pushTower();
     }
     int removed = nodeQueue.front();
     nodeQueue.erase(nodeQueue.begin());
@@ -1072,8 +1073,7 @@ void followXYQueueStep() {
   uint8_t correctThreshold = viveTargetDead ? 6 : 0;
   if (correctTime > correctThreshold) {
     if (viveTargetDead) {
-      if (isPush) pushTower();
-      else hitTower();
+      if (isPush && controlMode == MODE_HIGH_TOWER) pushTower();
     }
     xyQueue.pop_front();
   }
@@ -1844,19 +1844,21 @@ void loop() {
           if (xyQueue.empty()) {
             viveDone = true;
             autoWall = true;
-            driveForward = millis();
+            nexusStraight=false;
             if(wasBackward){
-              targetSpeed = -28;
-              rightTargetSpeed = -19;
+              targetSpeed = -23;
+              rightTargetSpeed = -23;
             } else {
-              targetSpeed = 28;
-              rightTargetSpeed = 19;
+              targetSpeed = 23;
+              rightTargetSpeed = 23;
             }
+            driveForward = millis();
+
           }
           lastViveMove = millis();
         }
       } else{
-        if(!nexusStraight && millis() - driveForward > 2000){
+        if(!nexusStraight && millis() - driveForward > 5000){
           targetSpeed = 0;
           rightTargetSpeed = 0;
           autoWall = false;
@@ -1961,7 +1963,7 @@ void loop() {
     calculateSpeed();
     lastSpeedCalc = millis();
   }
-  if (controlMode == MODE_VIVE && autoWall){
+  if (viveDone || controlMode == MODE_VIVE && autoWall){
     updateMotorControl();
     lastControlUpdate = millis();
   }
