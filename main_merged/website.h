@@ -311,6 +311,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <button onclick="attackLowTower()"  style="flex:1; padding:14px;">Attack Low Tower</button>
         <button onclick="attackHighTower()" style="flex:1; padding:14px;">Attack High Tower</button>
         <button onclick="attackNexus()"     style="flex:1; padding:14px;">Attack Nexus</button>
+        <button onclick="attackLast()"     style="flex:1; padding:14px;">Last Task</button>
         <button onclick="stopTask()"     style="flex:1; padding:14px;">Purge Tasks(P key)(</button>
       </div>
 
@@ -334,8 +335,8 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     let wallPrefilled = false;
 
     // Press-and-hold driving constants and key state
-    const DRIVE_SPEED = 50;   // forward speed when holding Up
-    const STEER_SPEED = 20;   // steering magnitude when holding Left/Right
+    const DRIVE_SPEED = 60;   // forward speed when holding Up
+    const STEER_SPEED = 30;   // steering magnitude when holding Left/Right
     const keyState = { up: false, down: false, left: false, right: false };
 
     function recomputeDriveFromKeys() {
@@ -348,7 +349,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       if (keyState.left)  {steer = -STEER_SPEED;
       }
       if (keyState.right) steer =  STEER_SPEED;
-      if (steer) speed = speed / 2; 
+      if (speed) steer = steer * 2 / 3; 
       setControl(speed, steer);
     }
 
@@ -662,6 +663,10 @@ MODE  : ${data.mode}`;
 
     function attackNexus() {
       fetch('/attack?target=nexus');
+    }
+
+    function attackLast() {
+      fetch('/attack?target=lastTask');
     }
 
     function returnArm() {

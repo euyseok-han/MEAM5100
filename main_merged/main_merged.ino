@@ -60,10 +60,9 @@
 
 uint8_t health = 1;
 float Faster = 1.0; // Speed multiplier
-bool FIRST_SHOT = true;
 // ========== WIFI ==========
-const char* ssid = "TP-Link_8A8C";
-const char* password = "12488674";
+const char* ssid = "Hphone";
+const char* password = "qqqq1234";
 WebServer server(80);
 volatile uint32_t commandCount = 0;
 
@@ -180,21 +179,34 @@ bool hitNexus = false;
 unsigned long driveForward = 0;
 unsigned long wallFollowTime = 0;
 
-const int LOW_TOWER_Y_THRESHOLD = 5000;
-const int PRE_LOW_TOWER_X = 4610;
-const int PRE_LOW_TOWER_Y = 5150;
-const int LOW_TOWER_X = 4590;
-const int LOW_TOWER_Y = 4000;
 
-const int HIGH_TOWER_Y_THRESHOLD = 4050;
-const int HIGH_TOWER_X = 2600;
-const int HIGH_TOWER_Y = 4000;
+
+
+
+
+const int LOW_TOWER_Y_THRESHOLD = 4600;
+const int PRE_LOW_TOWER_X = 4600;
+const int PRE_LOW_TOWER_Y = 4600;
+const int LOW_TOWER_X = 4600;
+const int LOW_TOWER_Y = 4400;
+
+const int HIGH_TOWER_Y_THRESHOLD = 4100;
+const int HIGH_TOWER_X = 2700;
+const int HIGH_TOWER_Y = 3550;
+// Pre-approach waypoint for high tower (fallback: same as target to avoid compile errors)
+const int PRE_HIGH_TOWER_X = 3140;
+const int PRE_HIGH_TOWER_Y = 3600;
 
 const int NEXUS_Y_THRESHOLD = 4580;
-const int PRE_NEXUS_X = 4570;
-const int PRE_NEXUS_Y = 6000;
-const int NEXUS_X = 4600;
-const int NEXUS_Y = 6300;
+const int PRE_NEXUS_X = 4720;
+const int PRE_NEXUS_Y = 6090;
+const int NEXUS_X = 4760;
+const int NEXUS_Y = 6500;
+
+
+
+
+
 
 // ========== VIVE ==========
 Vive510 viveLeft(VIVE_LEFT_PIN);
@@ -234,7 +246,7 @@ const unsigned long CONTROL_PERIOD    = 2;
 const unsigned long SPEED_CALC_PERIOD = 2;
 const unsigned long TOF_READ_PERIOD   = 50;
 const unsigned long IMU_READ_PERIOD   = 50;
-const unsigned long PRINT_PERIOD      = 1000;
+const unsigned long PRINT_PERIOD      = 2000;
 const unsigned long VIVE_READ_PERIOD       = 8;
 const unsigned long VIVE_MOVE_PERIOD       = 30;
 bool coordViveMode = false;
@@ -247,8 +259,8 @@ public:
   bool push;
   std::vector<int> neighbors;
 
-  Node(int xCoord, int yCoord, std::vector<int> neigh, bool isDead = false, bool push=false)
-      : x(xCoord), y(yCoord), neighbors(neigh), dead(isDead) {}
+  Node(int xCoord, int yCoord, std::vector<int> neigh, bool isDead = false, bool doPush=false)
+      : x(xCoord), y(yCoord), neighbors(neigh), dead(isDead), push(doPush) {}
 };
 
 class Graph {
@@ -369,7 +381,7 @@ void resetYaw() {
   filteredGyroZ = 0.0;  // Reset low-pass filter
   lastGyroTime = millis();
 }
-
+bool viveDone = false;
 bool vivePoseValid() {
   return !(robotX == 0 && robotY == 0);
 }
@@ -719,7 +731,10 @@ void wallFollowPD() {
   Serial.print("  Distance Error: ");
   Serial.print(distOneError);
   Serial.print("  Angle Error: ");
-  Serial.println(angleError);}
+  Serial.println(angleError);
+  Serial.println(autoWall);
+  Serial.println(commandCount);
+  }
   steer = constrain(steer, -20, 20);
 
   targetSpeed      = (wallFollowSpeed + steer) * Faster;
@@ -879,31 +894,32 @@ void pushTower(){
   rawSetMotorPWM( hitSpeed, LEFT_MOTOR);
   rawSetMotorPWM( hitSpeed, RIGHT_MOTOR);
   
-  if (controlMode == LAST_TASK) delay(2000);
+  if (controlMode == LAST_TASK) {hitSpeed = hitSpeed * Faster; delay(1000);}
   else delay(4000);
   rawSetMotorPWM(-hitSpeed, LEFT_MOTOR);
   rawSetMotorPWM(-hitSpeed, RIGHT_MOTOR);
-  delay(1000);
-  StopMotor();
+  delay(600);
+  rawStopMotor();
 }
 
 void spin(int t=500){
-  rawSetMotorPWM(40, RIGHT_MOTOR);
-  rawSetMotorPWM(-40, LEFT_MOTOR);
+  rawSetMotorPWM(26, RIGHT_MOTOR);
+  rawSetMotorPWM(-26, LEFT_MOTOR);
   delay(t);
 }
 void hitTower(){
-  int hitSpeed = wasBackward ? -30 : 30;
+  int hitSpeed = wasBackward ? -40 : 40;
 
-  uint8_t hitTimes = 5;
+  uint8_t hitTimes = 6;
 
   for (int k = 0; k < hitTimes; k++) {
     rawSetMotorPWM( hitSpeed, LEFT_MOTOR);
     rawSetMotorPWM( hitSpeed, RIGHT_MOTOR);
-    delay(900);
+    if (k==0) delay(5000);
+    else delay(800);
     rawSetMotorPWM(-hitSpeed, LEFT_MOTOR);
     rawSetMotorPWM(-hitSpeed, RIGHT_MOTOR);
-    delay(500);
+    delay(100);
   }
   rawSetMotorPWM(0, LEFT_MOTOR);
   rawSetMotorPWM(0, RIGHT_MOTOR);
@@ -948,18 +964,26 @@ bool viveGoToPointStep() {
   const float DEG2RAD        = (float)M_PI / 180.0f;
   const float TURN_THRESHOLD = viveTargetDead ? (8.0f * DEG2RAD) : (25.0f * DEG2RAD);
   const float TURN_GAIN      = viveTargetDead ? 50.0f : 50.0f;
-  const int   TURN_LIMIT     = viveTargetDead ? 23 : 25;
-  
+  const float   TURN_LIMIT     = viveTargetDead ? 25.5 : 25.5;
+  int turnErrorTime = 0;
   if (fabs(err) > TURN_THRESHOLD) {
+    turnErrorTime ++;
+    float turn;
+    if (turnErrorTime > 50){
+      turn = 50;
+    }
+    else {
     float turnRaw = err * TURN_GAIN;
-    if (40 > turnRaw && turnRaw >= 0) turnRaw = 23;
-    if (-40 < turnRaw && turnRaw < 0) turnRaw = -23;
-    float turn    = constrain((int)turnRaw, -TURN_LIMIT, TURN_LIMIT);
-    rawSetMotorPWM( -turn, LEFT_MOTOR);
-    rawSetMotorPWM( turn, RIGHT_MOTOR);
+    if (40 > turnRaw && turnRaw >= 0) turnRaw = 25.5;
+    if (-40 < turnRaw && turnRaw < 0) turnRaw = -25.5;
+    turn    = constrain((int)turnRaw, -TURN_LIMIT, TURN_LIMIT);
+    }
+
+    rawSetMotorPWM( -turn/Faster, LEFT_MOTOR);
+    rawSetMotorPWM( turn/Faster, RIGHT_MOTOR);
     return false;  // still turning
   }
-
+  turnErrorTime = 0;
   if (viveTargetDead) {
     rawStopMotor();
     return true;
@@ -1042,11 +1066,10 @@ void followXYQueueStep() {
   uint8_t correctThreshold = viveTargetDead ? 6 : 0;
   if (correctTime > correctThreshold) {
     if (viveTargetDead) {
-      if (controlMode == LAST_TASK) pushTower();
+      if (isPush) pushTower();
       else hitTower();
     }
     xyQueue.pop_front();
-    // if (viveTargetDead) hitTower();
   }
 }
 
@@ -1100,9 +1123,11 @@ void handleStopTask() {
   commandCount++;
   reSetup();
   stopMotor();
+  wallFollowTime = millis();
   rawStopMotor();
   controlMode = MODE_MANUAL;
-  
+  autoWall = true;
+
   server.send(200, "text/plain", "Motor stopped");
 }
 
@@ -1290,11 +1315,11 @@ void handleAttack() {
   }
   else if (t == "lastTask"){
     controlMode = LAST_TASK;
-    Faster = 1.2;
+    Faster = 1.4;
     xyQueue.push_back({PRE_LOW_TOWER_X, PRE_LOW_TOWER_Y, false, false});
     xyQueue.push_back({LOW_TOWER_X, LOW_TOWER_Y, true, true});
-    xyQueue.push_back({PRE_HIGH_TOWER_X, PRE_HIGH_TOWER_Y, false, false});
-    xyQueue.push_back({HIGH_TOWER_X, HIGH_TOWER_Y, true, true});
+    xyQueue.push_back({PRE_NEXUS_X, PRE_NEXUS_Y, false, false});
+    xyQueue.push_back({NEXUS_X, NEXUS_Y, true, true});
     server.send(200, "text/plain", "Mode set: Last Task");
   }
   else {
@@ -1453,47 +1478,47 @@ void printViveState() {
     lastPrint = now;
 
     // ----- POSE -----
-    printf("POSE X,Y = %.1f, %.1f\n", robotX, robotY);
+    Serial.printf("POSE X,Y = %.1f, %.1f\n", robotX, robotY);
 
     // ----- Heading -----
-    printf("Heading: %.4f\n", robotHeading);
+    Serial.printf("Heading: %.4f\n", robotHeading);
 
     // ----- Desired Heading -----
-    printf("Desired: %.4f\n", desiredHeading);
+    Serial.printf("Desired: %.4f\n", desiredHeading);
 
     // ===============================
     // NODE QUEUE (BFS)
     // ===============================
     if (!coordViveMode) {
-        printf("QUEUE: [");
+        Serial.print("QUEUE: [");
 
         for (int i = 0; i < (int)nodeQueue.size(); i++) {
             if (i < (int)nodeQueue.size() - 1)
-                printf("%d,", nodeQueue[i]);
+                Serial.printf("%d,", nodeQueue[i]);
             else
-                printf("%d", nodeQueue[i]);
+                Serial.printf("%d", nodeQueue[i]);
         }
 
-        printf("]\n");
+        Serial.println("]");
     }
 
     // ===============================
     // XY QUEUE (Go-To-Point)
     // ===============================
     else {
-        printf("XYQ: [");
+        Serial.print("XYQ: [");
 
         for (int i = 0; i < (int)xyQueue.size(); i++) {
-            printf("(%d,%d,%c)", 
+            Serial.printf("(%d,%d,%c)", 
                   xyQueue[i].x,
                   xyQueue[i].y,
                   xyQueue[i].isDead ? 'D' : 'N');
 
             if (i < (int)xyQueue.size() - 1)
-                printf(" - ");
+                Serial.print(" - ");
         }
 
-        printf("]\n");
+        Serial.println("]");
     }
 
 }
@@ -1742,14 +1767,15 @@ void loop() {
         computeVivePose();
         lastVive = millis();
       }
-      
-      if(autoWall){
+
+      if (autoWall) {
         wallFollowPD();
-        if(millis() - wallFollowTime > 2000 && robotY > LOW_TOWER_Y_THRESHOLD){
+
+        if (millis() - wallFollowTime > 2000 && robotY > LOW_TOWER_Y_THRESHOLD) {
           autoWall = false;
           targetSpeed = 0;
           rightTargetSpeed = 0;
-      }
+        }
       } else {
         if (millis() - lastViveMove >= VIVE_MOVE_PERIOD) {
           followXYQueueStep();
@@ -1759,18 +1785,66 @@ void loop() {
           }
           lastViveMove = millis();
         }
+      }
+
+      if (autoWall && driveForward != 0 && millis() - driveForward >= 15000) {
+        controlMode   = MODE_MANUAL;
+        wallFollowMode = false;
+        currentState  = STATE_IDLE;
+        stopMotor();
+        robotX = 0; robotY = 0;
+      }
+      break;
+
+    case MODE_NEXUS:
+      if (millis() - lastVive >= VIVE_READ_PERIOD) {
+        readDualVive();
+        computeVivePose();
+        lastVive = millis();
+      }
+      if(autoWall && millis() - wallFollowTime > 2000 && robotY > NEXUS_Y_THRESHOLD){
+        autoWall = false;
+        targetSpeed = 0;
+        rightTargetSpeed = 0;
+      }
+      if(autoWall && !viveDone){
+        wallFollowPD();
+      } else if(!viveDone){
+        if (millis() - lastViveMove >= VIVE_MOVE_PERIOD) {
+          followXYQueueStep();
+          if (xyQueue.empty()) {
+            viveDone = true;
+            autoWall = true;
+            driveForward = millis();
+            if(wasBackward){
+              targetSpeed = -20;
+              rightTargetSpeed = -20;
+            } else {
+              targetSpeed = 20;
+              rightTargetSpeed = 20;
+            }
+          }
+          lastViveMove = millis();
+        }
       } else{
-        if(millis() - driveForward < 15000){
-          
-        } else {
+        if(!nexusStraight && millis() - driveForward > 2000){
+          targetSpeed = 0;
+          rightTargetSpeed = 0;
+          autoWall = false;
+          nexusStraight = true;
+        }
+        if(nexusStraight && !hitNexus){
+          hitTower();
+        } else if (hitNexus) {
           controlMode   = MODE_MANUAL;
           wallFollowMode = false;
+          autoWall = true;
           currentState  = STATE_IDLE;
           stopMotor();
           robotX = 0; robotY = 0;
         }
       }
-    break;
+      break;
 
     case MODE_HIGH_TOWER:
       if (millis() - lastVive >= VIVE_READ_PERIOD) {
@@ -1778,17 +1852,19 @@ void loop() {
         computeVivePose();
         lastVive = millis();
       }
-      if(millis() - wallFollowTime > 2000 && robotY > 3620 && robotY < HIGH_TOWER_Y_THRESHOLD){
+      if (millis() - wallFollowTime > 2000 && robotY > 3620 && robotY < HIGH_TOWER_Y_THRESHOLD) {
         certainCount++;
       }
- 
-      if(autoWall){
-        if(certainCount > 1){
+      else certainCount = 0;
+      
+      if (autoWall) {
+        if (certainCount > 1) {
           autoWall = false;
           targetSpeed = 0;
           rightTargetSpeed = 0;
-      }
-        wallFollowPD();
+        }
+        else wallFollowPD();
+        
       } else {
         if (millis() - lastViveMove >= VIVE_MOVE_PERIOD) {
           followXYQueueStep();
@@ -1798,9 +1874,11 @@ void loop() {
           }
           lastViveMove = millis();
         }
-      } else{
-        if(millis() - driveForward < 18000){
-          if(wasBackward){
+      }
+
+      if (autoWall && driveForward != 0) {
+        if (millis() - driveForward < 18000) {
+          if (wasBackward) {
             targetSpeed = -20;
             rightTargetSpeed = -20;
           } else {
@@ -1820,44 +1898,36 @@ void loop() {
     case LAST_TASK:
       if (millis() - lastVive >= VIVE_READ_PERIOD) {
         readDualVive();
-      if (millis() - lastVive >= VIVE_READ_PERIOD) {
-        readDualVive();
         computeVivePose();
         lastVive = millis();
       }
-      if(FIRST_SHOT && autoWall && millis() - wallFollowTime > 2000 && robotY > LOW_TOWER_Y_THRESHOLD){
+      if (autoWall && millis() - wallFollowTime > 2000 && robotY > LOW_TOWER_Y_THRESHOLD) {
         autoWall = false;
-        targetSpeed = 0;
-        rightTargetSpeed = 0;
-        FIRST_SHOT = false;
+        rawSetMotorPWM(0, LEFT_MOTOR);
+        rawSetMotorPWM(0, RIGHT_MOTOR);
       }
-      if(!FIRST_SHOT && autoWall &&millis() - wallFollowTime > 2000 && robotY > 3620 && robotY < HIGH_TOWER_Y_THRESHOLD ){
-        autoWall = false;
-        targetSpeed = 0;
-        rightTargetSpeed = 0;
-      }
-      if(autoWall){
+
+      if (autoWall) {
         wallFollowPD();
-      } else {
+      } 
+      else {
         if (millis() - lastViveMove >= VIVE_MOVE_PERIOD) {
           followXYQueueStep();
           lastViveMove = millis();
           if (xyQueue.empty()) {
-            if (FIRST_SHOT){
             spin(500);
             xyQueue.push_back({PRE_HIGH_TOWER_X, PRE_HIGH_TOWER_Y, false, false});
             xyQueue.push_back({HIGH_TOWER_X, HIGH_TOWER_Y, true, true});
-            }
-            ControlMode = MODE_HIGH_TOWER;
+            controlMode = MODE_HIGH_TOWER;
             autoWall = true;
             driveForward = millis();
-            wallFollowTime = millis();}
+            wallFollowTime = millis();
+          }
           }
         }
-      }
-  
-      break;
-  }
+
+      break;}
+
 
   if (millis() - lastSpeedCalc >= SPEED_CALC_PERIOD) {
     calculateSpeed();
@@ -1868,7 +1938,7 @@ void loop() {
     lastControlUpdate = millis();
   }
 
-  if (millis() - lastControlUpdate >= CONTROL_PERIOD && controlMode != MODE_VIVE && autoWall) {
+  if (autoWall && millis() - lastControlUpdate >= CONTROL_PERIOD && controlMode != MODE_VIVE) {
     updateMotorControl();
     lastControlUpdate = millis();
   }
