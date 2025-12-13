@@ -553,13 +553,13 @@ void attackArm() {
     servoPos = 1000;
     lastServoMove = millis();
   } else {
-    if(millis() - lastServoMove > 2000){
+    if(millis() - lastServoMove > 1200){
       if(servoPos == 400){
         servoPos = 1000;
       } else {
         servoPos = 400;
       }
-      BusServo.LobotSerialServoMove(1,servoPos,1200);
+      BusServo.LobotSerialServoMove(1,servoPos,1000);
       lastServoMove = millis();
     }
   }
