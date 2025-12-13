@@ -61,8 +61,8 @@
 uint8_t health = 1;
 float Faster = 1.0; // Speed multiplier
 // ========== WIFI ==========
-const char* ssid = "Hphone";
-const char* password = "qqqq1234";
+const char* ssid = "HammerEV";
+const char* password = "35353535";
 WebServer server(80);
 volatile uint32_t commandCount = 0;
 
@@ -1580,22 +1580,27 @@ void setup() {
   //   Serial.println("Failed to configure static IP");
   // }
 
-  WiFi.begin(ssid, password);
-  Serial.print("Connecting to WiFi ");
-  Serial.println(ssid);
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts++ < 100) {
-    delay(200);
-    Serial.print('.');
-  }
-  Serial.println();
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("WiFi connected!");
-    Serial.print("IP: ");
-    Serial.println(WiFi.localIP());
-  } else {
-    Serial.println("WiFi connection failed");
-  }
+  WiFi.softAP(ssid, password);
+
+  Serial.print("AP IP Address: HTML//");
+  Serial.println(WiFi.softAPIP());
+
+  // WiFi.begin(ssid, password);
+  // Serial.print("Connecting to WiFi ");
+  // Serial.println(ssid);
+  // int attempts = 0;
+  // while (WiFi.status() != WL_CONNECTED && attempts++ < 100) {
+  //   delay(200);
+  //   Serial.print('.');
+  // }
+  // Serial.println();
+  // if (WiFi.status() == WL_CONNECTED) {
+  //   Serial.println("WiFi connected!");
+  //   Serial.print("IP: ");
+  //   Serial.println(WiFi.localIP());
+  // } else {
+  //   Serial.println("WiFi connection failed");
+  // }
   server.on("/",            handleRoot);
   server.on("/setspeed",    handleSetSpeed);
   server.on("/control",     handleControl);
