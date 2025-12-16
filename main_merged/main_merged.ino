@@ -185,9 +185,9 @@ unsigned long wallFollowTime = 0;
 
 
 const int LOW_TOWER_Y_THRESHOLD = 4600;
-const int PRE_LOW_TOWER_X = 4730;
+const int PRE_LOW_TOWER_X = 4530;
 const int PRE_LOW_TOWER_Y = 4320;
-const int LOW_TOWER_X = 4800;
+const int LOW_TOWER_X = 4600;
 const int LOW_TOWER_Y = 4000;
 
 const int HIGH_TOWER_Y_THRESHOLD = 4100;
