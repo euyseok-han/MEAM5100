@@ -1,5 +1,7 @@
 /*
  * MEAM5100 Unified Control for the Final Project
+ * Team 35: HammerEV
+ * Members: Louis Han, Michael Duan, Parra Wang, Rick Wang
  */
 
 #include <WiFi.h>
