@@ -1,11 +1,6 @@
 /*
- * MEAM5100 Unified Control
- * - MODE_MANUAL: web manual drive + PID speed control
- * - MODE_WALL:   wall-follow with TOF + IMU (via TCA9548A)
- * - MODE_VIVE:   Vive-based BFS route following
+ * MEAM5100 Unified Control for the Final Project
  */
-
-// ToDo: remove stopmotor() between vive points
 
 #include <WiFi.h>
 #include <WebServer.h>
@@ -27,13 +22,13 @@
 #define LEFT_MOTOR         0
 #define RIGHT_MOTOR        1
 
-// LEFT Motor & Encoder (as in your Code A)
+// LEFT Motor & Encoder
 #define ENCODER_A          15
 #define ENCODER_B          16
 #define MOTOR_RPWM         6
 #define MOTOR_LPWM         7
 
-// RIGHT  Motor & Encoder (as in your Code A)
+// RIGHT  Motor & Encoder
 #define RIGHT_ENCODER_A    1
 #define RIGHT_ENCODER_B    2
 #define RIGHT_MOTOR_RPWM   41
@@ -54,7 +49,7 @@
 #define receiveEnablePin   13
 #define transmitEnablePin  14
 
-// Vive trackers (Code A style: left/right)
+// Vive trackers 
 #define VIVE_LEFT_PIN      4
 #define VIVE_RIGHT_PIN     5
 
@@ -122,7 +117,7 @@ int frontDistance  = 0;
 int rightDistance1 = 0;
 int rightDistance2 = 0;
 
-// ========== IMU (Code B) ==========
+// ========== IMU ==========
 Adafruit_MPU6050 mpu;
 float currentAngle   = 0;
 float gyroZOffset    = 0;
@@ -132,7 +127,7 @@ const float GYRO_ALPHA    = 0.8;
 const float GYRO_DEADBAND = 0.5;
 float       filteredGyroZ = 0.0;
 
-// ========== WALL FOLLOW (Code B) ==========
+// ========== WALL FOLLOW ==========
 bool  wallFollowMode      = false;
 int   frontGoalDistance   = 100;
 int   rightGoalDistance1  = 60;
@@ -818,7 +813,7 @@ void updateStateMachine() {
   }
 }
 
-// ========== VIVE READ + POSE (Code A) ==========
+// ========== VIVE READ + POSE  ==========
 void readDualVive() {
   leftValid  = false;
   rightValid = false;
@@ -1584,23 +1579,6 @@ void setup() {
 
   Serial.print("AP IP Address: HTML//");
   Serial.println(WiFi.softAPIP());
-
-  // WiFi.begin(ssid, password);
-  // Serial.print("Connecting to WiFi ");
-  // Serial.println(ssid);
-  // int attempts = 0;
-  // while (WiFi.status() != WL_CONNECTED && attempts++ < 100) {
-  //   delay(200);
-  //   Serial.print('.');
-  // }
-  // Serial.println();
-  // if (WiFi.status() == WL_CONNECTED) {
-  //   Serial.println("WiFi connected!");
-  //   Serial.print("IP: ");
-  //   Serial.println(WiFi.localIP());
-  // } else {
-  //   Serial.println("WiFi connection failed");
-  // }
   server.on("/",            handleRoot);
   server.on("/setspeed",    handleSetSpeed);
   server.on("/control",     handleControl);
@@ -1753,23 +1731,6 @@ void loop() {
         else {
           rawStopMotor(); 
           autoWall = false;
-
-          // if (goToY)
-          // int start = findNearestNode(robotX, robotY);
-          // int goal = findNearestNode(gotoX, gotoY);
-          // std::vector<int> route = graph.bfs(start, goal);
-          // if (route.empty()) {
-          //   server.send(200, "text/plain", "NO ROUTE FOUND, but coord is added to XYqueue");
-          //   return;
-          // }
-
-          // size_t beginIndex = 0;
-          // if (!nodeQueue.empty() && nodeQueue.back() == route[0]) {
-          //   beginIndex = 1;
-          // }
-          // for (size_t i = beginIndex; i < route.size(); ++i) {
-          //   nodeQueue.push_back(route[i]);
-          // }
         }
       }
       else {
