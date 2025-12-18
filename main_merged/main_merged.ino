@@ -61,8 +61,8 @@
 uint8_t health = 1;
 float Faster = 1.0; // Speed multiplier
 // ========== WIFI ==========
-const char* ssid = "Hphone";
-const char* password = "qqqq1234";
+const char* ssid = "HammerEV";
+const char* password = "35353535";
 WebServer server(80);
 volatile uint32_t commandCount = 0;
 
@@ -185,10 +185,10 @@ unsigned long wallFollowTime = 0;
 
 
 const int LOW_TOWER_Y_THRESHOLD = 4600;
-const int PRE_LOW_TOWER_X = 4600;
-const int PRE_LOW_TOWER_Y = 4600;
-const int LOW_TOWER_X = 4650;
-const int LOW_TOWER_Y = 4400;
+const int PRE_LOW_TOWER_X = 4530;
+const int PRE_LOW_TOWER_Y = 4320;
+const int LOW_TOWER_X = 4600;
+const int LOW_TOWER_Y = 4000;
 
 const int HIGH_TOWER_Y_THRESHOLD = 4100;
 const int HIGH_TOWER_X = 2700;
@@ -382,6 +382,8 @@ void resetYaw() {
   lastGyroTime = millis();
 }
 bool viveDone = false;
+bool nexusWall = false;
+bool nexusTurn = false;
 bool vivePoseValid() {
   return !(robotX == 0 && robotY == 0);
 }
@@ -551,13 +553,13 @@ void attackArm() {
     servoPos = 1000;
     lastServoMove = millis();
   } else {
-    if(millis() - lastServoMove > 2000){
+    if(millis() - lastServoMove > 1200){
       if(servoPos == 400){
         servoPos = 1000;
       } else {
         servoPos = 400;
       }
-      BusServo.LobotSerialServoMove(1,servoPos,1200);
+      BusServo.LobotSerialServoMove(1,servoPos,1000);
       lastServoMove = millis();
     }
   }
@@ -1087,10 +1089,16 @@ void handleRoot() {
 
 void handleSetSpeed() {
   commandCount++;
+
   if (server.hasArg("speed") && server.hasArg("steering")) {
    
     baseSpeed     = server.arg("speed").toFloat();
     steeringValue = server.arg("steering").toFloat();
+
+    if(baseSpeed == 0 && steeringValue == 0){
+      leftPID.integral = 0;
+      rightPID.integral = 0;
+    }
 
     if (fabs(steeringValue) <= 5) steeringValue *= 1.4f;
     if (fabs(baseSpeed)    <= 10) baseSpeed     *= 1.4f;
@@ -1318,6 +1326,8 @@ void handleAttack() {
     Serial.println("Attacking nexus");
     controlMode = MODE_NEXUS;
     hitNexus = false;
+    nexusTurn = false;
+    nexusWall = false;
     xyQueue.push_back({PRE_NEXUS_X, PRE_NEXUS_Y, false, false});
     xyQueue.push_back({NEXUS_X, NEXUS_Y, true, false});
     server.send(200, "text/plain", "Mode set: NEXUS");
@@ -1570,22 +1580,27 @@ void setup() {
   //   Serial.println("Failed to configure static IP");
   // }
 
-  WiFi.begin(ssid, password);
-  Serial.print("Connecting to WiFi ");
-  Serial.println(ssid);
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts++ < 100) {
-    delay(200);
-    Serial.print('.');
-  }
-  Serial.println();
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("WiFi connected!");
-    Serial.print("IP: ");
-    Serial.println(WiFi.localIP());
-  } else {
-    Serial.println("WiFi connection failed");
-  }
+  WiFi.softAP(ssid, password);
+
+  Serial.print("AP IP Address: HTML//");
+  Serial.println(WiFi.softAPIP());
+
+  // WiFi.begin(ssid, password);
+  // Serial.print("Connecting to WiFi ");
+  // Serial.println(ssid);
+  // int attempts = 0;
+  // while (WiFi.status() != WL_CONNECTED && attempts++ < 100) {
+  //   delay(200);
+  //   Serial.print('.');
+  // }
+  // Serial.println();
+  // if (WiFi.status() == WL_CONNECTED) {
+  //   Serial.println("WiFi connected!");
+  //   Serial.print("IP: ");
+  //   Serial.println(WiFi.localIP());
+  // } else {
+  //   Serial.println("WiFi connection failed");
+  // }
   server.on("/",            handleRoot);
   server.on("/setspeed",    handleSetSpeed);
   server.on("/control",     handleControl);
@@ -1826,54 +1841,31 @@ void loop() {
   break;
 
     case MODE_NEXUS:
-      if (millis() - lastVive >= VIVE_READ_PERIOD) {
-        readDualVive();
-        computeVivePose();
-        lastVive = millis();
-      }
-      if(autoWall && millis() - wallFollowTime > 2000 && robotY > NEXUS_Y_THRESHOLD){
-        autoWall = false;
-        targetSpeed = 0;
-        rightTargetSpeed = 0;
-      }
-      if(autoWall && !viveDone){
+      if(autoWall && !nexusWall){
         wallFollowPD();
-      } else if(!viveDone){
-        if (millis() - lastViveMove >= VIVE_MOVE_PERIOD) {
-          followXYQueueStep();
-          if (xyQueue.empty()) {
-            viveDone = true;
-            autoWall = true;
-            nexusStraight=false;
-            if(wasBackward){
-              targetSpeed = -23;
-              rightTargetSpeed = -23;
-            } else {
-              targetSpeed = 23;
-              rightTargetSpeed = 23;
-            }
-            driveForward = millis();
-
-          }
-          lastViveMove = millis();
-        }
-      } else{
-        if(!nexusStraight && millis() - driveForward > 5000){
-          targetSpeed = 0;
-          rightTargetSpeed = 0;
-          autoWall = false;
-          nexusStraight = true;
-        }
-        if(nexusStraight && !hitNexus){
-          hitTower();
-        } else if (hitNexus) {
-          controlMode   = MODE_MANUAL;
-          wallFollowMode = false;
-          autoWall = true;
-          currentState  = STATE_IDLE;
+        if(frontDistance < 120){
+          nexusWall = true;
           stopMotor();
-          robotX = 0; robotY = 0;
+          updateGyroIntegration();
+          resetYaw();
+          targetTurnAngle = 60;
         }
+      } else if(nexusWall){
+        if(turnByAngle(targetTurnAngle)){
+          nexusWall = false;
+          autoWall = false;
+          nexusTurn = true;
+          resetYaw();
+        }
+      } else if(nexusTurn){
+        hitTower();
+      } else if(hitNexus){
+        controlMode   = MODE_MANUAL;
+        wallFollowMode = false;
+        autoWall = true;
+        currentState  = STATE_IDLE;
+        stopMotor();
+        robotX = 0; robotY = 0;
       }
       break;
 
