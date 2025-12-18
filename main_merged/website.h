@@ -190,6 +190,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
         <button class="stop-btn" onclick="stopMotor()">STOP("S" key)</button>
         <button onclick="setControl(currentSpeed, currentSteering)" style="background:#008CFF;">Go("D" key)</button>
+        <button onclick="initSpeed()" style="background:#008CFF;">Init("I" key)</button>
       </div>
 
       <!-- PID TUNING -->
@@ -310,6 +311,20 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <button onclick="attackLowTower()"  style="flex:1; padding:14px;">Attack Low Tower</button>
         <button onclick="attackHighTower()" style="flex:1; padding:14px;">Attack High Tower</button>
         <button onclick="attackNexus()"     style="flex:1; padding:14px;">Attack Nexus</button>
+        <button onclick="attackLast()"     style="flex:1; padding:14px;">Last Task</button>
+        <button onclick="stopTask()"     style="flex:1; padding:14px;">Purge Tasks(P key)(</button>
+      </div>
+
+      <!-- ARM CONTROLS -->
+      <div class="panel arm-section" style="
+          background:#e6f7ff;
+          display:flex;
+          justify-content:space-between;
+          align-items:center;
+          gap:12px;
+      ">
+        <button onclick="returnArm()" style="flex:1; padding:14px;">Return Arm(Q)</button>
+        <button onclick="attackArm()" style="flex:1; padding:14px;">Attack Arm(E)</button>
       </div>
     </div>
   </div>
@@ -318,6 +333,25 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     let currentSpeed = 0;
     let currentSteering = 0;
     let wallPrefilled = false;
+
+    // Press-and-hold driving constants and key state
+    const DRIVE_SPEED = 60;   // forward speed when holding Up
+    const STEER_SPEED = 30;   // steering magnitude when holding Left/Right
+    const keyState = { up: false, down: false, left: false, right: false };
+
+    function recomputeDriveFromKeys() {
+      let speed = 0;
+      let steer = 0;
+
+      if (keyState.up)   speed = DRIVE_SPEED;
+      if (keyState.down) speed = -DRIVE_SPEED;
+
+      if (keyState.left)  {steer = -STEER_SPEED;
+      }
+      if (keyState.right) steer =  STEER_SPEED;
+      if (speed) steer = steer * 2 / 3; 
+      setControl(speed, steer);
+    }
 
     // ================== DIRECTION INDICATOR ==================
     function updateDirectionIndicator(speed, steering) {
@@ -371,6 +405,27 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       updateDirectionIndicator(0, 0);
 
       fetch('/stop');
+    }
+
+    function initSpeed(){
+      currentSpeed = 0;
+      currentSteering = 0;
+      document.getElementById('speedSlider').value = 0;
+      document.getElementById('steeringSlider').value = 0;
+      document.getElementById('speedValue').textContent = 0;
+      document.getElementById('steeringValue').textContent = 0;
+      updateDirectionIndicator(0, 0);
+      }
+    function stopTask() {
+      currentSpeed = 0;
+      currentSteering = 0;
+      document.getElementById('speedSlider').value = 0;
+      document.getElementById('steeringSlider').value = 0;
+      document.getElementById('speedValue').textContent = 0;
+      document.getElementById('steeringValue').textContent = 0;
+      updateDirectionIndicator(0, 0);
+
+      fetch('/stop_task');
     }
 
     function updatePID() {
@@ -610,27 +665,42 @@ MODE  : ${data.mode}`;
       fetch('/attack?target=nexus');
     }
 
+    function attackLast() {
+      fetch('/attack?target=lastTask');
+    }
+
+    function returnArm() {
+      fetch('/arm?cmd=return');
+    }
+
+    function attackArm() {
+      fetch('/arm?cmd=attack');
+    }
+
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'ArrowUp') {
-        currentSpeed = Math.min(120, currentSpeed + 10);
-      }
-      if (e.key === 'ArrowDown') {
-        currentSpeed = Math.max(-120, currentSpeed - 10);
-      }
-      if (e.key === 'ArrowLeft') {
-        currentSteering = Math.max(-60, currentSteering - 5);
-      }
-      if (e.key === 'ArrowRight') {
-        currentSteering = Math.min(60, currentSteering + 5);
+      if (e.repeat) return; // prevent auto-repeat
+
+      switch (e.key) {
+        case 'ArrowUp':    keyState.up = true;    recomputeDriveFromKeys(); break;
+        case 'ArrowDown':  keyState.down = true;  recomputeDriveFromKeys(); break;
+        case 'ArrowLeft':  keyState.left = true;  recomputeDriveFromKeys(); break;
+        case 'ArrowRight': keyState.right = true; recomputeDriveFromKeys(); break;
       }
 
       if (e.key === 's' || e.key === 'S') {
         stopMotor();
         return;
       }
-        
+      if (e.key === 'p' || e.key === 'P') {
+        stopTask();
+        return;
+      }  
       if (e.key === "d" || e.key === "D") {
         setControl(currentSpeed, currentSteering);
+        return;
+      }
+      if (e.key === "i" || e.key === "I") {
+        initSpeed();
         return;
       }
       if (e.key === "b" || e.key === "B") {
@@ -641,6 +711,14 @@ MODE  : ${data.mode}`;
         sendGoToPoint();
         return;
       }
+      if (e.key === "q" || e.key === "Q") {
+        returnArm();
+        return;
+      }
+      if (e.key === "E" || e.key === "e") {
+        attackArm();
+        return;
+}
       if (e.key === "c" || e.key === "C") {
         queueClear();
         return;
@@ -648,6 +726,18 @@ MODE  : ${data.mode}`;
       document.getElementById('speedSlider').value = currentSpeed;
       document.getElementById('steeringSlider').value = currentSteering;
       updateControlLocal();
+    });
+
+    // Stop or adjust on key release
+    document.addEventListener('keyup', (e) => {
+      switch (e.key) {
+        case 'ArrowUp':    keyState.up = false;    break;
+        case 'ArrowDown':  keyState.down = false;  break;
+        case 'ArrowLeft':  keyState.left = false;  break;
+        case 'ArrowRight': keyState.right = false; break;
+        default: return;
+      }
+      recomputeDriveFromKeys();
     });
 
     // Enter on BFS inputs = "Add Route"
