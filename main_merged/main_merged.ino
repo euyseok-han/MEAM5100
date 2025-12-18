@@ -57,6 +57,7 @@
 
 uint8_t health = 1;
 float Faster = 1.0; // Speed multiplier
+
 // ========== WIFI ==========
 const char* ssid = "HammerEV";
 const char* password = "35353535";
@@ -177,10 +178,7 @@ bool hitNexus = false;
 unsigned long driveForward = 0;
 unsigned long wallFollowTime = 0;
 
-
-// coords!!!!!
-
-
+// Coordinates for Autonomous Tasks
 const int LOW_TOWER_Y_THRESHOLD = 4600;
 const int PRE_LOW_TOWER_X = 4530;
 const int PRE_LOW_TOWER_Y = 4320;
@@ -199,11 +197,6 @@ const int PRE_NEXUS_X = 4720;
 const int PRE_NEXUS_Y = 5950;
 const int NEXUS_X = 4590;
 const int NEXUS_Y = 6300;
-
-
-
-
-
 
 // ========== VIVE ==========
 Vive510 viveLeft(VIVE_LEFT_PIN);
@@ -248,6 +241,7 @@ const unsigned long VIVE_READ_PERIOD       = 8;
 const unsigned long VIVE_MOVE_PERIOD       = 30;
 bool coordViveMode = false;
 bool isPush = false;
+
 // ========== GRAPH + BFS (Code A) ==========
 class Node {
 public:
@@ -356,7 +350,6 @@ uint16_t filterVive(uint16_t raw, ViveBuffer &v) {
     return m;
 }
 
-
 int findNearestNode(float x, float y) {
   int best = -1;
   float bestDist = 1e12;
@@ -413,7 +406,6 @@ static inline int pwmFromRPM(float rpm) {
 void setMotorPWM(int rpmCmd, int motorSide) {
   int scaled = pwmFromRPM(rpmCmd);
   if (motorSide == RIGHT_MOTOR) {
-    // scaled = -scaled;
     if (scaled > 0) {
       ledcWrite(RIGHT_MOTOR_RPWM, scaled);
       ledcWrite(RIGHT_MOTOR_LPWM, 0);
@@ -443,7 +435,6 @@ void rawSetMotorPWM(int pwm, int motorSide) {
   int scaled = constrain(pwm, -255, 255);
   scaled = scaled * Faster;
   if (motorSide == RIGHT_MOTOR) {
-    // scaled = -scaled;
     if (scaled > 0) {
       ledcWrite(RIGHT_MOTOR_RPWM, scaled);
       ledcWrite(RIGHT_MOTOR_LPWM, 0);
@@ -621,8 +612,8 @@ void reSetup(){
   lastVive          = millis();
   topHatUpdate      = millis();
   lastServoMove     = millis();
-
 }
+
 void updateGyroIntegration() {
   unsigned long now = millis();
   float dt = (now - lastGyroTime) / 1000.0f;
@@ -646,7 +637,6 @@ bool turnByAngle(float targetAngle) {
   const float maxTurnSpeed   = 50;
 
   if (fabs(angleError) < angleTolerance) {
-    // stopMotor();
     targetSpeed = 0;
     rightTargetSpeed = 0;
     leftPID.integral   = 0;
@@ -714,17 +704,10 @@ void wallFollowPD() {
   if (lastWallFollowUpdate == 0) dt = TOF_READ_PERIOD / 1000.0f;
   lastWallFollowUpdate = currentTime;
 
-  // float avgRight  = (rightDistance1 + rightDistance2) / 2.0f;
-  // float distError = avgRight - rightGoalDistance1;
-  // float deri      = (dt > 0) ? (distError - lastDistError) / dt : 0;
-  // lastDistError   = distError;
-
   float distOneError = rightDistance1 - rightGoalDistance1;
 
   float angleError = rightDistance1 - rightDistance2;
 
-  // float steer = wallFollowKp * distError + wallFollowKd * deri;
-  // float steer = wallFollowKp * distError - wallAngleKp * angleRight;
   float steer = wallFollowKp * distOneError + wallAngleKp * angleError;
   if (millis() - lastPrint > PRINT_PERIOD) {
   Serial.print("wallAngleKp: ");
@@ -742,8 +725,6 @@ void wallFollowPD() {
 
   targetSpeed      = (wallFollowSpeed + steer) * Faster;
   rightTargetSpeed = (wallFollowSpeed - steer) * Faster;
-
-
 }
 
 // ========== WALL STATE MACHINE ==========
@@ -759,12 +740,12 @@ void updateStateMachine() {
         resetYaw();
         targetTurnAngle = 60;
       } 
-      // else if (rightDistance2 > WALL_LOST_THRESHOLD) {
-      //   currentState = STATE_BLIND_FORWARD;
-      //   stateStartTime = millis();
-      //   targetSpeed      = wallFollowSpeed * 0.6;
-      //   rightTargetSpeed = wallFollowSpeed * 0.6;
-      // }
+      else if (rightDistance2 > WALL_LOST_THRESHOLD) {
+        currentState = STATE_BLIND_FORWARD;
+        stateStartTime = millis();
+        targetSpeed      = wallFollowSpeed * 0.6;
+        rightTargetSpeed = wallFollowSpeed * 0.6;
+      }
       break;
 
     case STATE_INNER_CORNER:
@@ -820,11 +801,11 @@ void readDualVive() {
   leftValid  = false;
   rightValid = false;
   // last good sample for pair-based spike rejection
-static uint16_t lastLX = 0, lastLY = 0;
+  static uint16_t lastLX = 0, lastLY = 0;
 
-if (viveLeft.status() != VIVE_RECEIVING) {
+  if (viveLeft.status() != VIVE_RECEIVING) {
     viveLeft.sync(5);
-} else {
+  } else {
     // shift history
     lx2 = lx1; ly2 = ly1;
     lx1 = lx0; ly1 = ly0;
@@ -845,13 +826,13 @@ if (viveLeft.status() != VIVE_RECEIVING) {
         lastLX = fx;
         lastLY = fy;
     }
-}
+  }
 
-static uint16_t lastRX = 0, lastRY = 0;
+  static uint16_t lastRX = 0, lastRY = 0;
 
-if (viveRight.status() != VIVE_RECEIVING) {
+  if (viveRight.status() != VIVE_RECEIVING) {
     viveRight.sync(5);
-} else {
+  } else {
     rx2 = rx1; ry2 = ry1;
     rx1 = rx0; ry1 = ry0;
 
@@ -862,15 +843,14 @@ if (viveRight.status() != VIVE_RECEIVING) {
     uint16_t fy = filterVive(rawY, initRY);
 
     if (fx > 0 && fy > 0) {
-        rx = fx;
-        ry = fy;
-        rightValid = true;
-        lastRX = fx;
-        lastRY = fy;
+      rx = fx;
+      ry = fy;
+      rightValid = true;
+      lastRX = fx;
+      lastRY = fy;
     }
+  }
 }
-}
-
 
 void computeVivePose() {
   if (leftValid && rightValid) {
@@ -915,6 +895,7 @@ void spin(int t=500){
   rawSetMotorPWM(-26, LEFT_MOTOR);
   delay(t);
 }
+
 void hitTower(){
   int hitSpeed = wasBackward ? -23 : 23;
 
@@ -923,7 +904,6 @@ void hitTower(){
   for (int k = 0; k < hitTimes; k++) {
     rawSetMotorPWM(hitSpeed*Faster, LEFT_MOTOR);
     rawSetMotorPWM(hitSpeed*Faster, RIGHT_MOTOR);
-    // if (k==0) delay(5000);
     delay(800);
     rawSetMotorPWM(-hitSpeed*Faster, LEFT_MOTOR);
     rawSetMotorPWM(-hitSpeed*Faster, RIGHT_MOTOR);
@@ -934,6 +914,7 @@ void hitTower(){
   hitNexus = true;
   rawStopMotor();
 }
+
 bool viveGoToPointStep() {
   if (!leftValid || !rightValid) {
     rawStopMotor();
@@ -1083,12 +1064,10 @@ void handleRoot() {
   server.send_P(200, "text/html", INDEX_HTML);
 }
 
-
 void handleSetSpeed() {
   commandCount++;
 
   if (server.hasArg("speed") && server.hasArg("steering")) {
-   
     baseSpeed     = server.arg("speed").toFloat();
     steeringValue = server.arg("steering").toFloat();
 
@@ -1241,11 +1220,13 @@ void xyQueueClear() {
   viveTargetX = 0 ;
   viveTargetY = 0 ;
 }
+
 void nodeQueueClear() {
   while (!nodeQueue.empty()) nodeQueue.erase(nodeQueue.begin());
   viveTargetX = 0 ;
   viveTargetY = 0 ;   
 }
+
 void handleMode() {
   commandCount++;
   if (!server.hasArg("m")) {
@@ -1446,8 +1427,6 @@ void handleRoute() {
     return;
   }
 
-  
-
   size_t beginIndex = 0;
   if (!nodeQueue.empty() && nodeQueue.back() == route[0]) {
     beginIndex = 1;
@@ -1455,8 +1434,6 @@ void handleRoute() {
   for (size_t i = beginIndex; i < route.size(); ++i) {
     nodeQueue.push_back(route[i]);
   }
-
-  
 
   String s = "[";
   for (size_t i = 0; i < nodeQueue.size(); ++i) {
@@ -1536,7 +1513,6 @@ void printViveState() {
 
         Serial.println("]");
     }
-
 }
 
 
@@ -1567,15 +1543,6 @@ void setup() {
 
   attachInterrupt(digitalPinToInterrupt(ENCODER_A),       encoderISR,      RISING);
   attachInterrupt(digitalPinToInterrupt(RIGHT_ENCODER_A), rightEncoderISR, RISING);
-
-  // // WiFi with static IP
-  // IPAddress local_IP(192, 168, 1, 111);
-  // IPAddress gateway(192, 168, 1, 1);
-  // IPAddress subnet(255, 255, 255, 0);
-
-  // if (!WiFi.config(local_IP, gateway, subnet)) {
-  //   Serial.println("Failed to configure static IP");
-  // }
 
   WiFi.softAP(ssid, password);
 
